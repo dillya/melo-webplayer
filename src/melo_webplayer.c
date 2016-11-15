@@ -32,6 +32,7 @@ static MeloModuleInfo melo_webplayer_info = {
   .config_id = "webplayer",
 };
 
+static void melo_webplayer_constructed (GObject *gobject);
 static const MeloModuleInfo *melo_webplayer_get_info (MeloModule *module);
 
 struct _MeloWebPlayerPrivate {
@@ -69,6 +70,9 @@ melo_webplayer_class_init (MeloWebPlayerClass *klass)
 
   mclass->get_info = melo_webplayer_get_info;
 
+  /* Add custom constructed() function */
+  oclass->constructed = melo_webplayer_constructed;
+
   /* Add custom finalize() function */
   oclass->finalize = melo_webplayer_finalize;
 }
@@ -93,6 +97,26 @@ melo_webplayer_init (MeloWebPlayer *self)
 
   /* Create links between browser and player */
   melo_browser_set_player (priv->browser, priv->player);
+}
+
+static void
+melo_webplayer_constructed (GObject *gobject)
+{
+  MeloWebPlayerPrivate *priv = melo_webplayer_get_instance_private(
+                                                      MELO_WEBPLAYER (gobject));
+  gchar *path;
+
+  /* Set player binary path */
+  path = melo_module_build_path (MELO_MODULE (gobject), "bin");
+  melo_player_webplayer_set_bin_path (MELO_PLAYER_WEBPLAYER (priv->player),
+                                      path);
+  g_free (path);
+
+  /* Update player binaries */
+  melo_player_webplayer_update_grabber (MELO_PLAYER_WEBPLAYER (priv->player));
+
+  /* Chain up to the parent class */
+  G_OBJECT_CLASS (melo_webplayer_parent_class)->constructed (gobject);
 }
 
 static const MeloModuleInfo *

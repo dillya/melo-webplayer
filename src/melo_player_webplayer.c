@@ -20,9 +20,14 @@
  * Boston, MA  02110-1301, USA.
  */
 
+#include <json-glib/json-glib.h>
 #include <gst/gst.h>
 
 #include "melo_player_webplayer.h"
+
+#define MELO_PLAYER_WEBPLAYER_GRABBER "youtube-dl"
+#define MELO_PLAYER_WEBPLAYER_GRABBER_URL \
+    "https://yt-dl.org/downloads/latest/youtube-dl"
 
 static gboolean bus_call (GstBus *bus, GstMessage *msg, gpointer data);
 static void pad_added_handler (GstElement *src, GstPad *pad, GstElement *sink);
@@ -42,9 +47,12 @@ static MeloPlayerStatus *melo_player_webplayer_get_status (MeloPlayer *player);
 
 struct _MeloPlayerWebPlayerPrivate {
   GMutex mutex;
+  gchar *bin_path;
+  gboolean updating;
 
   /* Status */
   MeloPlayerStatus *status;
+  gchar *url;
   gchar *uri;
 
   /* Gstreamer pipeline */
@@ -78,8 +86,12 @@ melo_player_webplayer_finalize (GObject *gobject)
   /* Free tag list */
   gst_tag_list_unref (priv->tag_list);
 
-  /* Free URI */
+  /* Free URL and URI */
   g_free (priv->uri);
+  g_free (priv->url);
+
+  /* Free binary path */
+  g_free (priv->bin_path);
 
   /* Free player mutex */
   g_mutex_clear (&priv->mutex);
@@ -118,6 +130,7 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
   GstBus *bus;
 
   self->priv = priv;
+  priv->url = NULL;
   priv->uri = NULL;
 
   /* Init player mutex */
@@ -147,6 +160,92 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
   gst_object_unref (bus);
 }
 
+void
+melo_player_webplayer_set_bin_path (MeloPlayerWebPlayer *webp,
+                                    const gchar *path)
+{
+  g_free (webp->priv->bin_path);
+  webp->priv->bin_path = g_strdup (path);
+}
+
+static gpointer
+melo_player_webplayer_update_thread(gpointer user_data)
+{
+  MeloPlayerWebPlayerPrivate *priv = user_data;
+  gchar *path = NULL;
+  gchar *argv[5];
+  gboolean ret;
+
+  /* Check grabber directory (create if necessary) */
+  if (g_mkdir_with_parents (priv->bin_path, 0700))
+    goto end;
+
+  /* Generate grabber file path */
+  path = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER, priv->bin_path);
+
+  /* Check grabber */
+  if (g_file_test (path, G_FILE_TEST_EXISTS)) {
+    /* Prepare update command */
+    argv[0] = path;
+    argv[1] = "--update";
+    argv[2] = NULL;
+
+    /* Update grabber */
+    ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL |
+                        G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, NULL, NULL,
+                        NULL, NULL);
+  } else {
+    /* Prepare download command */
+    argv[0] = "wget";
+    argv[1] = MELO_PLAYER_WEBPLAYER_GRABBER_URL;
+    argv[2] = "-O";
+    argv[3] = path;
+    argv[4] = NULL;
+
+    /* Download grabber */
+    ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH |
+                        G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                        NULL, NULL, NULL, NULL, NULL, NULL);
+    if (!ret)
+      goto end;
+
+    /* Prepare change mode command */
+    argv[0] = "chmod";
+    argv[1] = "a+x";
+    argv[2] = path;
+    argv[3] = NULL;
+    ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH |
+                        G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                        NULL, NULL, NULL, NULL, NULL, NULL);
+  }
+
+end:
+  /* End of update */
+  priv->updating = FALSE;
+  g_free (path);
+
+  return NULL;
+}
+
+gboolean
+melo_player_webplayer_update_grabber (MeloPlayerWebPlayer *webp)
+{
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  GThread *thread;
+
+  /* An update is already in progress */
+  if (priv->updating)
+    return FALSE;
+
+  /* Start of update */
+  priv->updating = TRUE;
+
+  /* Create thread */
+  thread = g_thread_new ("webplayer_grabber_update",
+                         melo_player_webplayer_update_thread, priv);
+  g_thread_unref (thread);
+}
+
 static gboolean
 bus_call (GstBus *bus, GstMessage *msg, gpointer data)
 {
@@ -162,8 +261,8 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
       gint64 duration;
 
       /* Get duration */
-      if (gst_element_query_duration (priv->src, GST_FORMAT_TIME, &duration)) {
-        priv->status->duration = duration / 1000000; }
+      if (gst_element_query_duration (priv->src, GST_FORMAT_TIME, &duration))
+        priv->status->duration = duration / 1000000;
       break;
     }
     case GST_MESSAGE_TAG: {
@@ -250,11 +349,107 @@ pad_added_handler (GstElement *src, GstPad *pad, GstElement *sink)
   g_object_unref (sink_pad);
 }
 
+static gchar *
+melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path)
+{
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  JsonParser *parser;
+  JsonObject *obj;
+  JsonNode *node;
+  gboolean ret;
+  gchar *out = NULL;
+  gchar *uri = NULL;
+  gchar *argv[4];
+
+  /* Prepare command to get media URI */
+  argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER,
+                             priv->bin_path ? priv->bin_path : ".");
+  argv[1] = "--dump-json";
+  argv[2] = g_strdup (path);
+  argv[3] = NULL;
+
+  /* Get JSON information for web player URL */
+  ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL,
+                      &out, NULL, NULL, NULL);
+  g_free (argv[2]);
+  g_free (argv[0]);
+
+  /* Execution failed */
+  if (!ret || !out)
+    goto error;
+
+  /* Parse JSON information from output */
+  parser = json_parser_new ();
+  if (!json_parser_load_from_data (parser, out, -1, NULL))
+    goto error;
+  g_free (out);
+
+  /* Get root node and object */
+  node = json_parser_get_root (parser);
+  obj = json_node_get_object (node);
+  if (!node || !obj)
+    goto bad_json;
+
+  /* Get best format if requested_formats is available */
+  if (json_object_has_member (obj, "requested_formats")) {
+    JsonObject *o = NULL;
+    JsonArray *formats;
+    gint best_abr = 0;
+    gint i, count;
+
+    /* Get requested formats array */
+    formats = json_object_get_array_member (obj, "requested_formats");
+    count = json_array_get_length (formats);
+    for (i = 0; i < count; i++) {
+      JsonObject *format = json_array_get_object_element (formats, i);
+      const gchar *acodec = NULL;
+      gint abr = 0;
+
+      /* Get values */
+      if (json_object_has_member (format, "acodec"))
+        acodec = json_object_get_string_member (format, "acodec");
+      if (json_object_has_member (format, "abr"))
+        abr = json_object_get_int_member (format, "abr");
+
+      /* No audio codec */
+      if (acodec && !strcmp (acodec, "none"))
+        continue;
+
+      /* Select format */
+      if (abr > best_abr) {
+        best_abr = abr;
+        o = format;
+      }
+    }
+
+    /* An object has been found: use it for next step */
+    if (o)
+      obj = o;
+  }
+
+  /* Get final URI to use with gstreamer */
+  if (json_object_has_member (obj, "url"))
+    uri = g_strdup (json_object_get_string_member (obj, "url"));
+
+  /* Free JSON parser and objects */
+  g_object_unref (parser);
+
+  return uri;
+
+bad_json:
+  g_object_unref (parser);
+  return NULL;
+error:
+  g_free (out);
+  return NULL;
+}
+
 static gboolean
 melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
                             const gchar *name, MeloTags *tags, gboolean insert)
 {
-  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+  MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (player);
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
   gchar *_name = NULL;
 
   /* Lock player mutex */
@@ -265,20 +460,24 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   melo_player_status_unref (priv->status);
   gst_tag_list_unref (priv->tag_list);
 
+  /* Replace URL */
+  g_free (priv->url);
+  priv->url = g_strdup (path);
+
   /* Replace URI */
   g_free (priv->uri);
-  priv->uri = g_strdup (path);
+  priv->uri = melo_player_webplayer_get_uri (webp, path);
 
   /* Create new status */
   if (!name) {
-    _name = g_path_get_basename (priv->uri);
+    _name = g_path_get_basename (priv->url);
     name = _name;
   }
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_PLAYING, name);
   priv->tag_list = gst_tag_list_new_empty ();
 
   /* Set new location to src element */
-  g_object_set (priv->src, "uri", path, NULL);
+  g_object_set (priv->src, "uri", priv->uri, NULL);
   gst_element_set_state (priv->pipeline, GST_STATE_PLAYING);
   g_free (_name);
 
@@ -366,7 +565,7 @@ melo_player_webplayer_get_pos (MeloPlayer *player, gint *duration)
     *duration = priv->status->duration;
 
   /* Get length */
-  if (!gst_element_query_position (priv->src, GST_FORMAT_TIME, &pos))
+  if (!gst_element_query_position (priv->pipeline, GST_FORMAT_TIME, &pos))
     pos = 0;
 
   return pos / 1000000;

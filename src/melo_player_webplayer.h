@@ -51,6 +51,10 @@ struct _MeloPlayerWebPlayerClass {
 
 GType melo_player_webplayer_get_type (void);
 
+void melo_player_webplayer_set_bin_path (MeloPlayerWebPlayer *webp,
+                                         const gchar *path);
+gboolean melo_player_webplayer_update_grabber (MeloPlayerWebPlayer *webp);
+
 G_END_DECLS
 
 #endif /* __MELO_PLAYER_WEBPLAYER_H__ */
