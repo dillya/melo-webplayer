@@ -32,6 +32,14 @@ PKG_CHECK_MODULES([LIBMELO],
     AC_MSG_ERROR(Libmelo $LIBMELO_REQ or later is required)
   ])
 
+dnl Check for LibSoup
+SOUP_REQ=2.40.0
+PKG_CHECK_MODULES([LIBSOUP],
+  libsoup-2.4 >= $SOUP_REQ, [],
+  [
+    AC_MSG_ERROR(LibSoup $SOUP_REQ or later is required)
+  ])
+
 dnl Set Melo libraries directory
 melolibdir="\$(libdir)/melo"
 AC_SUBST(melolibdir)
