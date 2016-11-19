@@ -47,6 +47,8 @@ static MeloBrowserList *melo_browser_youtube_search (MeloBrowser *browser,
                                                   MeloTagsFields tags_fields);
 static gboolean melo_browser_youtube_play (MeloBrowser *browser,
                                            const gchar *path);
+static gboolean melo_browser_youtube_add (MeloBrowser *browser,
+                                          const gchar *path);
 
 struct _MeloBrowserYoutubePrivate {
   GMutex mutex;
@@ -81,6 +83,7 @@ melo_browser_youtube_class_init (MeloBrowserYoutubeClass *klass)
   bclass->get_info = melo_browser_youtube_get_info;
   bclass->search = melo_browser_youtube_search;
   bclass->play = melo_browser_youtube_play;
+  bclass->add = melo_browser_youtube_add;
 
   /* Add custom finalize() function */
   oclass->finalize = melo_browser_youtube_finalize;
@@ -195,6 +198,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
     /* Generate new item */
     item = melo_browser_item_new (name, "video");
     item->full_name = full_name ? g_strdup (full_name) : g_strdup ("Unknown");
+    item->add = g_strdup ("Add to playlist");
 
     /* Add item to list */
     list->items = g_list_prepend (list->items, item);
@@ -219,6 +223,12 @@ bad_request:
   return NULL;
 }
 
+static gchar *
+melo_browser_youtube_get_url (MeloBrowser *browser, const gchar *path)
+{
+  return g_strdup_printf ("http://www.youtube.com/watch?v=%s", path);
+}
+
 static gboolean
 melo_browser_youtube_play (MeloBrowser *browser, const gchar *path)
 {
@@ -226,11 +236,28 @@ melo_browser_youtube_play (MeloBrowser *browser, const gchar *path)
   gboolean ret;
   gchar *url;
 
-  /* Generate final URL from browser path */
-  url = g_strdup_printf ("http://www.youtube.com/watch?v=%s", path);
+  /* Get final URL from browser path */
+  url = melo_browser_youtube_get_url (browser, path);
 
   /* Play youtube video */
-  ret = melo_player_play (browser->player, url, NULL, NULL, FALSE);
+  ret = melo_player_play (browser->player, url, NULL, NULL, TRUE);
+  g_free (url);
+
+  return ret;
+}
+
+static gboolean
+melo_browser_youtube_add (MeloBrowser *browser, const gchar *path)
+{
+  MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
+  gboolean ret;
+  gchar *url;
+
+  /* Get final URL from browser path */
+  url = melo_browser_youtube_get_url (browser, path);
+
+  /* Add youtube video */
+  ret = melo_player_add (browser->player, url, NULL, NULL);
   g_free (url);
 
   return ret;

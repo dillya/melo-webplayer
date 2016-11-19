@@ -29,13 +29,17 @@ static MeloBrowserInfo melo_browser_webplayer_info = {
   .description = "Open any Website (Video & Audio) URL",
   .go_support = TRUE,
   .go_play_support = TRUE,
+  .go_add_support = TRUE,
   .go_input_text = "Type your URL here...",
   .go_button_play_text = "Open",
+  .go_button_add_text = "Add to playlist",
 };
 
 static const MeloBrowserInfo *melo_browser_webplayer_get_info (
                                                           MeloBrowser *browser);
 static gboolean melo_browser_webplayer_play (MeloBrowser *browser,
+                                             const gchar *path);
+static gboolean melo_browser_webplayer_add (MeloBrowser *browser,
                                             const gchar *path);
 
 G_DEFINE_TYPE (MeloBrowserWebPlayer, melo_browser_webplayer, MELO_TYPE_BROWSER)
@@ -48,6 +52,7 @@ melo_browser_webplayer_class_init (MeloBrowserWebPlayerClass *klass)
 
   bclass->get_info = melo_browser_webplayer_get_info;
   bclass->play = melo_browser_webplayer_play;
+  bclass->add = melo_browser_webplayer_add;
 }
 
 static void
@@ -64,5 +69,11 @@ melo_browser_webplayer_get_info (MeloBrowser *browser)
 static gboolean
 melo_browser_webplayer_play (MeloBrowser *browser, const gchar *path)
 {
-  return melo_player_play (browser->player, path, NULL, NULL, FALSE);
+  return melo_player_play (browser->player, path, NULL, NULL, TRUE);
+}
+
+static gboolean
+melo_browser_webplayer_add (MeloBrowser *browser, const gchar *path)
+{
+  return melo_player_add (browser->player, path, NULL, NULL);
 }
