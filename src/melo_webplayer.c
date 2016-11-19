@@ -24,6 +24,7 @@
 #include "melo_webplayer.h"
 #include "melo_browser_webplayer.h"
 #include "melo_player_webplayer.h"
+#include "melo_playlist_simple.h"
 
 #include "melo_browser_youtube.h"
 
@@ -40,6 +41,7 @@ static const MeloModuleInfo *melo_webplayer_get_info (MeloModule *module);
 struct _MeloWebPlayerPrivate {
   MeloBrowser *browser;
   MeloPlayer *player;
+  MeloPlaylist *playlist;
 
   MeloBrowser *youtube;
 };
@@ -57,6 +59,9 @@ melo_webplayer_finalize (GObject *gobject)
                                     "webplayer_youtube_browser");
     g_object_unref (priv->youtube);
   }
+
+  if (priv->playlist)
+    g_object_unref (priv->playlist);
 
   if (priv->player) {
     melo_module_unregister_player (MELO_MODULE (gobject), "webplayer_player");
@@ -97,11 +102,13 @@ melo_webplayer_init (MeloWebPlayer *self)
                                     "webplayer_browser");
   priv->player = melo_player_new (MELO_TYPE_PLAYER_WEBPLAYER,
                                   "webplayer_player");
+  priv->playlist = melo_playlist_new (MELO_TYPE_PLAYLIST_SIMPLE,
+                                      "webplayer_playlist");
 
   priv->youtube = melo_browser_new (MELO_TYPE_BROWSER_YOUTUBE,
                                     "webplayer_youtube_browser");
 
-  if (!priv->browser || !priv->youtube || !priv->player)
+  if (!priv->browser || !priv->youtube || !priv->player || !priv->playlist)
     return;
 
   /* Register browser and player */
@@ -111,8 +118,10 @@ melo_webplayer_init (MeloWebPlayer *self)
   /* Register other browsers */
   melo_module_register_browser (MELO_MODULE (self), priv->youtube);
 
-  /* Create links between browsers and player */
+  /* Create links between browsers, player and playlist */
   melo_browser_set_player (priv->browser, priv->player);
+  melo_player_set_playlist (priv->player, priv->playlist);
+  melo_playlist_set_player (priv->playlist, priv->player);
 
   /* Create links with player on other browsers */
   melo_browser_set_player (priv->youtube, priv->player);
