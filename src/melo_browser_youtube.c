@@ -131,7 +131,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
   gint i;
 
   /* Create browser list */
-  list = melo_browser_list_new ();
+  list = melo_browser_list_new (NULL);
   if (!list)
     return NULL;
 

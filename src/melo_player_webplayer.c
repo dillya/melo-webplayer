@@ -463,7 +463,7 @@ melo_player_webplayer_add (MeloPlayer *player, const gchar *path,
     return FALSE;
 
   /* Add URL to playlist */
-  melo_playlist_add (player->playlist, name, name, path, FALSE);
+  melo_playlist_add (player->playlist, name, name, path, tags, FALSE);
 
   return TRUE;
 }
@@ -506,7 +506,7 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
 
   /* Add new media to playlist */
   if (insert && player->playlist)
-    melo_playlist_add (player->playlist, name, name, path, TRUE);
+    melo_playlist_add (player->playlist, name, name, path, tags, TRUE);
   g_free (_name);
 
   /* Unlock player mutex */
