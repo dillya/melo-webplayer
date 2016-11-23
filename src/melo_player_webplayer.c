@@ -21,6 +21,7 @@
  */
 
 #include <json-glib/json-glib.h>
+#include <libsoup/soup.h>
 #include <gst/gst.h>
 
 #include "melo_player_webplayer.h"
@@ -49,6 +50,8 @@ static MeloPlayerState melo_player_webplayer_get_state (MeloPlayer *player);
 static gchar *melo_player_webplayer_get_name (MeloPlayer *player);
 static gint melo_player_webplayer_get_pos (MeloPlayer *player, gint *duration);
 static MeloPlayerStatus *melo_player_webplayer_get_status (MeloPlayer *player);
+static gboolean melo_player_webplayer_get_cover (MeloPlayer *player,
+                                                 GBytes **data, gchar **type);
 
 struct _MeloPlayerWebPlayerPrivate {
   GMutex mutex;
@@ -67,6 +70,11 @@ struct _MeloPlayerWebPlayerPrivate {
 
   /* Gstreamer tags */
   GstTagList *tag_list;
+  GBytes *cover;
+  gchar *cover_type;
+
+  /* HTTP client */
+  SoupSession *session;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (MeloPlayerWebPlayer, melo_player_webplayer, MELO_TYPE_PLAYER)
@@ -77,6 +85,14 @@ melo_player_webplayer_finalize (GObject *gobject)
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (gobject);
   MeloPlayerWebPlayerPrivate *priv =
                               melo_player_webplayer_get_instance_private (webp);
+
+  /* Free HTTP client */
+  g_object_unref (priv->session);
+
+  /* Free cover */
+  if (priv->cover)
+    g_bytes_unref (priv->cover);
+  g_free (priv->cover_type);
 
   /* Stop pipeline */
   gst_element_set_state (priv->pipeline, GST_STATE_NULL);
@@ -124,6 +140,7 @@ melo_player_webplayer_class_init (MeloPlayerWebPlayerClass *klass)
   pclass->get_name = melo_player_webplayer_get_name;
   pclass->get_pos = melo_player_webplayer_get_pos;
   pclass->get_status = melo_player_webplayer_get_status;
+  pclass->get_cover = melo_player_webplayer_get_cover;
 
   /* Add custom finalize() function */
   object_class->finalize = melo_player_webplayer_finalize;
@@ -166,6 +183,11 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->pipeline));
   priv->bus_watch_id = gst_bus_add_watch (bus, bus_call, self);
   gst_object_unref (bus);
+
+  /*  Create a new HTTP client */
+  priv->session = soup_session_new_with_options (
+                                SOUP_SESSION_USER_AGENT, "Melo",
+                                NULL);
 }
 
 void
@@ -291,6 +313,12 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
                                                MELO_TAGS_FIELDS_FULL);
       melo_player_status_take_tags (priv->status, mtags);
 
+      /* Add cover if available */
+      if (priv->cover && !melo_tags_has_cover (mtags)) {
+        melo_tags_set_cover (mtags, priv->cover, priv->cover_type);
+        melo_tags_set_cover_url (mtags, G_OBJECT (webp), NULL, NULL);
+      }
+
       /* Unlock player mutex */
       g_mutex_unlock (&priv->mutex);
 
@@ -361,7 +389,8 @@ pad_added_handler (GstElement *src, GstPad *pad, GstElement *sink)
 }
 
 static gchar *
-melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path)
+melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path,
+                               gchar **thumb_url)
 {
   MeloPlayerWebPlayerPrivate *priv = webp->priv;
   JsonParser *parser;
@@ -400,6 +429,10 @@ melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path)
   obj = json_node_get_object (node);
   if (!node || !obj)
     goto bad_json;
+
+  /* Get thumbnail URL */
+  if (thumb_url && json_object_has_member (obj, "thumbnail"))
+    *thumb_url = g_strdup (json_object_get_string_member (obj, "thumbnail"));
 
   /* Get best format if requested_formats is available */
   if (json_object_has_member (obj, "requested_formats")) {
@@ -468,12 +501,53 @@ melo_player_webplayer_add (MeloPlayer *player, const gchar *path,
   return TRUE;
 }
 
+static void
+on_request_done (SoupSession *session, SoupMessage *msg, gpointer user_data)
+{
+  MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  const gchar *type;
+  MeloTags *tags;
+  GBytes *cover;
+
+  /* Get content type */
+  type = soup_message_headers_get_one (msg->response_headers, "Content-Type");
+
+  /* Get thumnail */
+  cover = g_bytes_new (msg->response_body->data, msg->response_body->length);
+
+  /* Lock status */
+  g_mutex_lock (&priv->mutex);
+
+  /* Change thumbnail and type */
+  if (priv->cover)
+    g_bytes_unref (priv->cover);
+  priv->cover = cover;
+  g_free (priv->cover_type);
+
+  /* Get tags from status */
+  tags = melo_player_status_get_tags (priv->status);
+
+  /* Set cover in tags */
+  if (tags) {
+    if (!melo_tags_has_cover (tags)) {
+      melo_tags_set_cover (tags, cover, type);
+      melo_tags_set_cover_url (tags, G_OBJECT (webp), NULL, NULL);
+    }
+    melo_tags_unref (tags);
+  }
+
+  /* Unlock status */
+  g_mutex_unlock (&priv->mutex);
+}
+
 static gboolean
 melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
                             const gchar *name, MeloTags *tags, gboolean insert)
 {
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (player);
   MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  gchar *thumb_url = NULL;
   gchar *_name = NULL;
 
   /* Lock player mutex */
@@ -483,6 +557,12 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   gst_element_set_state (priv->pipeline, GST_STATE_READY);
   melo_player_status_unref (priv->status);
   gst_tag_list_unref (priv->tag_list);
+  if (priv->cover) {
+    g_bytes_unref (priv->cover);
+    priv->cover = NULL;
+  }
+  g_free (priv->cover_type);
+  priv->cover_type = NULL;
 
   /* Replace URL */
   g_free (priv->url);
@@ -490,7 +570,7 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
 
   /* Replace URI */
   g_free (priv->uri);
-  priv->uri = melo_player_webplayer_get_uri (webp, path);
+  priv->uri = melo_player_webplayer_get_uri (webp, path, &thumb_url);
 
   /* Create new status */
   if (!name) {
@@ -511,6 +591,16 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
 
   /* Unlock player mutex */
   g_mutex_unlock (&priv->mutex);
+
+  /* Get thumbnail */
+  if (thumb_url) {
+    SoupMessage *msg;
+
+   /* Download thumbnail */
+    msg = soup_message_new ("GET", thumb_url);
+    soup_session_queue_message (priv->session, msg, on_request_done, webp);
+    g_free (thumb_url);
+  }
 
   return TRUE;
 }
@@ -656,4 +746,27 @@ melo_player_webplayer_get_status (MeloPlayer *player)
   g_mutex_unlock (&priv->mutex);
 
   return status;
+}
+
+static gboolean
+melo_player_webplayer_get_cover (MeloPlayer *player, GBytes **data,
+                                 gchar **type)
+{
+  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+  MeloTags *tags;
+
+  /* Lock status mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Copy status */
+  tags = melo_player_status_get_tags (priv->status);
+  if (tags) {
+    *data = melo_tags_get_cover (tags, type);
+    melo_tags_unref (tags);
+  }
+
+  /* Unlock status mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  return TRUE;
 }
