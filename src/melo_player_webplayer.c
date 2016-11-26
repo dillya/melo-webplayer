@@ -506,15 +506,15 @@ on_request_done (SoupSession *session, SoupMessage *msg, gpointer user_data)
 {
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
   MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  GBytes *cover = NULL;
   const gchar *type;
   MeloTags *tags;
-  GBytes *cover;
 
   /* Get content type */
   type = soup_message_headers_get_one (msg->response_headers, "Content-Type");
 
   /* Get thumnail */
-  cover = g_bytes_new (msg->response_body->data, msg->response_body->length);
+  g_object_get (msg, "response-body-data", &cover, NULL);
 
   /* Lock status */
   g_mutex_lock (&priv->mutex);
