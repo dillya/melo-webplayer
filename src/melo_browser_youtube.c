@@ -260,6 +260,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
   MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
   MeloBrowserYoutubePrivate  *priv = byoutube->priv;
   static MeloBrowserList *list;
+  const gchar *page_token = "";
   JsonArray *array;
   JsonObject *obj;
   gchar *url;
@@ -274,14 +275,21 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
   if (count > 50)
     count = 50;
 
+  /* Generate pageToken query */
+  if (token && *token != '\0')
+    page_token = "&pageToken=";
+  else
+    token = "";
+
   /* Generate URL */
   url = g_strdup_printf ("https://www.googleapis.com/youtube/v3/search?"
-                         "part=snippet&"
-                         "q=%s&"
-                         "maxResults=%d&"
-                         "type=video&"
-                         "key=" MELO_BROWSER_YOUTUBE_API_KEY,
-                         path, count);
+                         "part=snippet"
+                         "&q=%s"
+                         "&maxResults=%d"
+                         "%s%s"
+                         "&type=video"
+                         "&key=" MELO_BROWSER_YOUTUBE_API_KEY,
+                         path, count, page_token, token);
 
   /* Get JSON response object */
   obj = melo_browser_youtube_get_json_object (byoutube, url);
@@ -290,6 +298,22 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
   /* No videos found */
   if (!obj)
     return list;
+
+  /* Get list details */
+  if (json_object_has_member (obj, "nextPageToken"))
+    list->next_token = g_strdup (json_object_get_string_member (obj,
+                                                              "nextPageToken"));
+  if (json_object_has_member (obj, "prevPageToken"))
+    list->prev_token = g_strdup (json_object_get_string_member (obj,
+                                                              "prevPageToken"));
+  if (json_object_has_member (obj, "pageInfo")) {
+    JsonObject *o;
+
+    /* Get page info */
+    o = json_object_get_object_member (obj, "pageInfo");
+    if (o)
+      list->count = json_object_get_int_member (o, "totalResults");
+  }
 
   /* Get items array */
   array = json_object_get_array_member (obj, "items");
