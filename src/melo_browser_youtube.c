@@ -47,6 +47,7 @@ static const MeloBrowserInfo *melo_browser_youtube_get_info (
 static MeloBrowserList *melo_browser_youtube_search (MeloBrowser *browser,
                                                   const gchar *path,
                                                   gint offset, gint count,
+                                                  const gchar *token,
                                                   MeloBrowserTagsMode tags_mode,
                                                   MeloTagsFields tags_fields);
 static gboolean melo_browser_youtube_play (MeloBrowser *browser,
@@ -252,7 +253,7 @@ melo_browser_youtube_gen_tags (MeloBrowserYoutube *byoutube, JsonObject *obj,
 
 static MeloBrowserList *
 melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
-                             gint offset, gint count,
+                             gint offset, gint count, const gchar *token,
                              MeloBrowserTagsMode tags_mode,
                              MeloTagsFields tags_fields)
 {
