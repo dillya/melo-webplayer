@@ -70,8 +70,7 @@ struct _MeloPlayerWebPlayerPrivate {
   GstElement *src;
   guint bus_watch_id;
 
-  /* Gstreamer tags */
-  GstTagList *tag_list;
+  /* Current thumbnail / cover art */
   GBytes *cover;
   gchar *cover_type;
 
@@ -128,9 +127,6 @@ melo_player_webplayer_finalize (GObject *gobject)
 
   /* Free gstreamer pipeline */
   g_object_unref (priv->pipeline);
-
-  /* Free tag list */
-  gst_tag_list_unref (priv->tag_list);
 
   /* Free URL and URI */
   g_free (priv->uri);
@@ -189,9 +185,6 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
 
   /* Create new status handler */
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_NONE, NULL);
-
-  /* Create a new tag list */
-  priv->tag_list = gst_tag_list_new_empty ();
 
   /* Create pipeline */
   priv->pipeline = gst_pipeline_new ("webplayer_player_pipeline");
@@ -323,7 +316,7 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
     }
     case GST_MESSAGE_TAG: {
       GstTagList *tags;
-      MeloTags *mtags;
+      MeloTags *mtags, *otags;
 
       /* Get tag list from message */
       gst_message_parse_tag (msg, &tags);
@@ -331,19 +324,24 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
       /* Lock player mutex */
       g_mutex_lock (&priv->mutex);
 
-      /* Merge tags */
-      gst_tag_list_insert (priv->tag_list, tags, GST_TAG_MERGE_REPLACE);
-
       /* Fill MeloTags with GstTagList */
-      mtags = melo_tags_new_from_gst_tag_list (priv->tag_list,
-                                               MELO_TAGS_FIELDS_FULL);
-      melo_player_status_take_tags (priv->status, mtags);
+      mtags = melo_tags_new_from_gst_tag_list (tags, MELO_TAGS_FIELDS_FULL);
+
+      /* Merge with old tags */
+      otags = melo_player_status_get_tags (priv->status);
+      if (otags) {
+        melo_tags_merge (mtags, otags);
+        melo_tags_unref (otags);
+      }
 
       /* Add cover if available */
       if (priv->cover && !melo_tags_has_cover (mtags)) {
         melo_tags_set_cover (mtags, priv->cover, priv->cover_type);
         melo_tags_set_cover_url (mtags, G_OBJECT (webp), NULL, NULL);
       }
+
+      /* Set tags to player status */
+      melo_player_status_take_tags (priv->status, mtags);
 
       /* Unlock player mutex */
       g_mutex_unlock (&priv->mutex);
@@ -708,7 +706,6 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   /* Stop pipeline */
   gst_element_set_state (priv->pipeline, GST_STATE_READY);
   melo_player_status_unref (priv->status);
-  gst_tag_list_unref (priv->tag_list);
   if (priv->cover) {
     g_bytes_unref (priv->cover);
     priv->cover = NULL;
@@ -731,7 +728,6 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
     name = _name;
   }
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_PLAYING, name);
-  priv->tag_list = gst_tag_list_new_empty ();
   if (tags)
     melo_player_status_set_tags (priv->status, tags);
 
