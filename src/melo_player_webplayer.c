@@ -71,6 +71,7 @@ struct _MeloPlayerWebPlayerPrivate {
   guint bus_watch_id;
 
   /* Current thumbnail / cover art */
+  gboolean has_gst_cover;
   GBytes *cover;
   gchar *cover_type;
 
@@ -327,17 +328,18 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
       /* Fill MeloTags with GstTagList */
       mtags = melo_tags_new_from_gst_tag_list (tags, MELO_TAGS_FIELDS_FULL);
 
+      /* Add cover if available */
+      priv->has_gst_cover = melo_tags_has_cover (mtags);
+      if (priv->cover && !priv->has_gst_cover) {
+        melo_tags_set_cover (mtags, priv->cover, priv->cover_type);
+        melo_tags_set_cover_url (mtags, G_OBJECT (webp), NULL, NULL);
+      }
+
       /* Merge with old tags */
       otags = melo_player_status_get_tags (priv->status);
       if (otags) {
         melo_tags_merge (mtags, otags);
         melo_tags_unref (otags);
-      }
-
-      /* Add cover if available */
-      if (priv->cover && !melo_tags_has_cover (mtags)) {
-        melo_tags_set_cover (mtags, priv->cover, priv->cover_type);
-        melo_tags_set_cover_url (mtags, G_OBJECT (webp), NULL, NULL);
       }
 
       /* Set tags to player status */
@@ -566,16 +568,15 @@ on_request_done (SoupSession *session, SoupMessage *msg, gpointer user_data)
   priv->cover = cover;
   g_free (priv->cover_type);
 
-  /* Get tags from status */
-  tags = melo_player_status_get_tags (priv->status);
-
-  /* Set cover in tags */
-  if (tags) {
-    if (!melo_tags_has_cover (tags)) {
-      melo_tags_set_cover (tags, cover, type);
-      melo_tags_set_cover_url (tags, G_OBJECT (webp), NULL, NULL);
-    }
-    melo_tags_unref (tags);
+  /* Set cover if not provided by gstreamer */
+  if (!priv->has_gst_cover) {
+    /* Set cover into current player tags */
+    tags = melo_player_status_get_tags (priv->status);
+    if (tags) {
+        melo_tags_set_cover (tags, cover, type);
+        melo_tags_set_cover_url (tags, G_OBJECT (webp), NULL, NULL);
+        melo_tags_unref (tags);
+      }
   }
 
   /* Unlock status */
@@ -711,6 +712,7 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
     priv->cover = NULL;
   }
   g_free (priv->cover_type);
+  priv->has_gst_cover = FALSE;
   priv->cover_type = NULL;
 
   /* Replace URL */
