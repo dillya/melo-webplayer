@@ -30,6 +30,8 @@
 #define MELO_PLAYER_WEBPLAYER_GRABBER_URL \
     "https://yt-dl.org/downloads/latest/youtube-dl"
 
+#define MELO_PLAYER_WEBPLAYER_BUFFER_SIZE 8192
+
 static gboolean bus_call (GstBus *bus, GstMessage *msg, gpointer data);
 static void pad_added_handler (GstElement *src, GstPad *pad, GstElement *sink);
 
@@ -75,6 +77,13 @@ struct _MeloPlayerWebPlayerPrivate {
 
   /* HTTP client */
   SoupSession *session;
+
+  /* Child process */
+  GPid child_pid;
+  gint child_fd;
+  GString *child_buffer;
+  guint child_watch;
+  guint child_unix_watch;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (MeloPlayerWebPlayer, melo_player_webplayer, MELO_TYPE_PLAYER)
@@ -85,6 +94,22 @@ melo_player_webplayer_finalize (GObject *gobject)
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (gobject);
   MeloPlayerWebPlayerPrivate *priv =
                               melo_player_webplayer_get_instance_private (webp);
+
+  /* Stop process */
+  if (priv->child_pid > 0) {
+    /* Remove sources */
+    g_source_remove (priv->child_unix_watch);
+    g_source_remove (priv->child_watch);
+
+    /* Kill process */
+    kill (priv->child_pid, SIGTERM);
+    waitpid (priv->child_pid);
+
+    /* Free ressources */
+    g_spawn_close_pid (priv->child_pid);
+    g_string_free (priv->child_buffer, TRUE);
+    close (priv->child_fd);
+  }
 
   /* Free HTTP client */
   g_object_unref (priv->session);
@@ -155,6 +180,7 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
   GstBus *bus;
 
   self->priv = priv;
+  priv->child_fd = -1;
   priv->url = NULL;
   priv->uri = NULL;
 
@@ -389,34 +415,19 @@ pad_added_handler (GstElement *src, GstPad *pad, GstElement *sink)
 }
 
 static gchar *
-melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path,
-                               gchar **thumb_url)
+melo_player_webplayer_parse_json (MeloPlayerWebPlayerPrivate *priv,
+                                  gchar **thumb_url)
 {
-  MeloPlayerWebPlayerPrivate *priv = webp->priv;
   JsonParser *parser;
   JsonObject *obj;
   JsonNode *node;
-  gboolean ret;
-  gchar *out = NULL;
   gchar *uri = NULL;
-  gchar *argv[4];
+  gchar *out = NULL;
 
-  /* Prepare command to get media URI */
-  argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER,
-                             priv->bin_path ? priv->bin_path : ".");
-  argv[1] = "--dump-json";
-  argv[2] = g_strdup (path);
-  argv[3] = NULL;
-
-  /* Get JSON information for web player URL */
-  ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL,
-                      &out, NULL, NULL, NULL);
-  g_free (argv[2]);
-  g_free (argv[0]);
-
-  /* Execution failed */
-  if (!ret || !out)
-    goto error;
+  /* Get data */
+  out = g_string_free (priv->child_buffer, FALSE);
+  if (!out)
+    return NULL;
 
   /* Parse JSON information from output */
   parser = json_parser_new ();
@@ -489,16 +500,48 @@ error:
 }
 
 static gboolean
-melo_player_webplayer_add (MeloPlayer *player, const gchar *path,
-                           const gchar *name, MeloTags *tags)
+on_child_stdout (gint fd, GIOCondition condition, gpointer user_data)
 {
-  if (!player->playlist)
-    return FALSE;
+  MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  char buffer[MELO_PLAYER_WEBPLAYER_BUFFER_SIZE];
+  gboolean ret = FALSE;
+  gssize len;
 
-  /* Add URL to playlist */
-  melo_playlist_add (player->playlist, name, name, path, tags, FALSE);
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
 
-  return TRUE;
+  /* Stream error */
+  if (condition & G_IO_ERR) {
+    g_string_free (priv->child_buffer, TRUE);
+    goto end;
+  }
+
+  /* New data available from child */
+  if (condition & G_IO_IN) {
+    /* Read data from child */
+    len = read (fd, buffer, sizeof (buffer));
+    if (len < 0) {
+      /* Error when reading */
+      g_string_free (priv->child_buffer, TRUE);
+      goto end;
+    }
+
+    /* Append data to stdout buffer */
+    g_string_append_len (priv->child_buffer, buffer, len);
+    if (len)
+      ret = TRUE;
+  }
+
+end:
+  /* Close stdout */
+  if (!ret)
+    close (priv->child_fd);
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  return ret;
 }
 
 static void
@@ -541,13 +584,122 @@ on_request_done (SoupSession *session, SoupMessage *msg, gpointer user_data)
   g_mutex_unlock (&priv->mutex);
 }
 
+static void
+on_child_exited (GPid pid, gint status, gpointer user_data)
+{
+  MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Parse JSON response */
+  if (priv->child_buffer) {
+    gchar *thumb_url = NULL;
+
+    /* Get URI from website player */
+    priv->uri = melo_player_webplayer_parse_json (priv, &thumb_url);
+
+    /* Set new location to src element */
+    g_object_set (priv->src, "uri", priv->uri, NULL);
+    gst_element_set_state (priv->pipeline, GST_STATE_PLAYING);
+
+    /* Get thumbnail */
+    if (thumb_url) {
+      SoupMessage *msg;
+
+     /* Download thumbnail */
+      msg = soup_message_new ("GET", thumb_url);
+      soup_session_queue_message (priv->session, msg, on_request_done, webp);
+      g_free (thumb_url);
+    }
+  }
+
+  /* Reset PID */
+  g_spawn_close_pid (priv->child_pid);
+  priv->child_pid = 0;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+}
+
+static gboolean
+melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path)
+{
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  gchar *argv[4];
+  gboolean ret;
+
+  /* Stop previous process instance */
+  if (priv->child_pid > 0) {
+    /* Remove sources */
+    g_source_remove (priv->child_unix_watch);
+    g_source_remove (priv->child_watch);
+
+    /* Kill and wait child process */
+    kill (priv->child_pid, SIGTERM);
+    waitpid (priv->child_pid, NULL, 0);
+
+    /* Free ressources */
+    g_spawn_close_pid (priv->child_pid);
+    g_string_free (priv->child_buffer, TRUE);
+    close (priv->child_fd);
+    priv->child_buffer = NULL;
+    priv->child_pid = 0;
+    priv->child_fd = -1;
+  }
+
+  /* Prepare command to get media URI */
+  argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER,
+                             priv->bin_path ? priv->bin_path : ".");
+  argv[1] = "--dump-json";
+  argv[2] = g_strdup (path);
+  argv[3] = NULL;
+
+  /* Get JSON information for web player URL */
+  ret = g_spawn_async_with_pipes (NULL, argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL |
+                                  G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL,
+                                  &priv->child_pid, NULL, &priv->child_fd,
+                                  NULL, NULL);
+  g_free (argv[2]);
+  g_free (argv[0]);
+
+  /* Setup callbacks for output */
+  if (ret == TRUE) {
+    priv->child_buffer = g_string_new (0);
+
+    /* Capture child exit event */
+    priv->child_watch = g_child_watch_add (priv->child_pid, on_child_exited,
+                                           webp);
+
+    /* Capture child stdout */
+    priv->child_unix_watch = g_unix_fd_add (priv->child_fd,
+                                            G_IO_IN | G_IO_ERR | G_IO_HUP,
+                                            on_child_stdout, webp);
+  }
+
+  return ret;
+}
+
+static gboolean
+melo_player_webplayer_add (MeloPlayer *player, const gchar *path,
+                           const gchar *name, MeloTags *tags)
+{
+  if (!player->playlist)
+    return FALSE;
+
+  /* Add URL to playlist */
+  melo_playlist_add (player->playlist, name, name, path, tags, FALSE);
+
+  return TRUE;
+}
+
 static gboolean
 melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
                             const gchar *name, MeloTags *tags, gboolean insert)
 {
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (player);
   MeloPlayerWebPlayerPrivate *priv = webp->priv;
-  gchar *thumb_url = NULL;
   gchar *_name = NULL;
 
   /* Lock player mutex */
@@ -568,9 +720,10 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   g_free (priv->url);
   priv->url = g_strdup (path);
 
-  /* Replace URI */
+  /* Get URI */
   g_free (priv->uri);
-  priv->uri = melo_player_webplayer_get_uri (webp, path, &thumb_url);
+  priv->uri = NULL;
+  melo_player_webplayer_get_uri (webp, path);
 
   /* Create new status */
   if (!name) {
@@ -579,10 +732,8 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   }
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_PLAYING, name);
   priv->tag_list = gst_tag_list_new_empty ();
-
-  /* Set new location to src element */
-  g_object_set (priv->src, "uri", priv->uri, NULL);
-  gst_element_set_state (priv->pipeline, GST_STATE_PLAYING);
+  if (tags)
+    melo_player_status_set_tags (priv->status, tags);
 
   /* Add new media to playlist */
   if (insert && player->playlist)
@@ -591,16 +742,6 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
 
   /* Unlock player mutex */
   g_mutex_unlock (&priv->mutex);
-
-  /* Get thumbnail */
-  if (thumb_url) {
-    SoupMessage *msg;
-
-   /* Download thumbnail */
-    msg = soup_message_new ("GET", thumb_url);
-    soup_session_queue_message (priv->session, msg, on_request_done, webp);
-    g_free (thumb_url);
-  }
 
   return TRUE;
 }
