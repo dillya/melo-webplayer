@@ -731,7 +731,7 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   }
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_PLAYING, name);
   if (tags)
-    melo_player_status_set_tags (priv->status, tags);
+    melo_player_status_set_tags (priv->status, melo_tags_copy (tags));
 
   /* Add new media to playlist */
   if (insert && player->playlist)
