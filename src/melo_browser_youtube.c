@@ -36,6 +36,7 @@
 static MeloBrowserInfo melo_browser_youtube_info = {
   .name = "Browse Youtube",
   .description = "Navigate though all videos from Youtube",
+  .tags_support = TRUE,
   /* Search feature */
   .search_support = TRUE,
   .search_input_text = "Search...",
@@ -50,6 +51,9 @@ static MeloBrowserList *melo_browser_youtube_search (MeloBrowser *browser,
                                                   const gchar *token,
                                                   MeloBrowserTagsMode tags_mode,
                                                   MeloTagsFields tags_fields);
+static MeloTags *melo_browser_youtube_get_tags (MeloBrowser *browser,
+                                                const gchar *path,
+                                                MeloTagsFields fields);
 static gboolean melo_browser_youtube_play (MeloBrowser *browser,
                                            const gchar *path);
 static gboolean melo_browser_youtube_add (MeloBrowser *browser,
@@ -91,6 +95,7 @@ melo_browser_youtube_class_init (MeloBrowserYoutubeClass *klass)
 
   bclass->get_info = melo_browser_youtube_get_info;
   bclass->search = melo_browser_youtube_search;
+  bclass->get_tags = melo_browser_youtube_get_tags;
   bclass->play = melo_browser_youtube_play;
   bclass->add = melo_browser_youtube_add;
 
@@ -415,6 +420,24 @@ melo_browser_youtube_get_video_tags (MeloBrowserYoutube *byoutube,
     /* Free object */
     json_object_unref (obj);
   }
+
+  return tags;
+}
+
+static MeloTags *
+melo_browser_youtube_get_tags (MeloBrowser *browser, const gchar *path,
+                               MeloTagsFields fields)
+{
+  MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
+  MeloTags *tags;
+  gchar *url;
+
+  /* Get final URL from browser path */
+  url = melo_browser_youtube_get_url (browser, path);
+
+  /* Get video tags */
+  tags = melo_browser_youtube_get_video_tags (byoutube, path, NULL, fields);
+  g_free (url);
 
   return tags;
 }
