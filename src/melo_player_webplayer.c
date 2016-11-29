@@ -747,18 +747,22 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
 static gboolean
 melo_player_webplayer_prev (MeloPlayer *player)
 {
+  MeloTags *tags = NULL;
+  gchar *name = NULL;
   gboolean ret;
   gchar *path;
 
   g_return_val_if_fail (player->playlist, FALSE);
 
   /* Get URI for previous media */
-  path = melo_playlist_get_prev (player->playlist, TRUE);
+  path = melo_playlist_get_prev (player->playlist, &name, &tags, TRUE);
   if (!path)
     return FALSE;
 
   /* Play media */
-  ret = melo_player_webplayer_play (player, path, NULL, NULL, FALSE);
+  ret = melo_player_webplayer_play (player, path, name, tags, FALSE);
+  melo_tags_unref (tags);
+  g_free (name);
   g_free (path);
 
   return ret;
@@ -767,18 +771,22 @@ melo_player_webplayer_prev (MeloPlayer *player)
 static gboolean
 melo_player_webplayer_next (MeloPlayer *player)
 {
+  MeloTags *tags = NULL;
+  gchar *name = NULL;
   gboolean ret;
   gchar *path;
 
   g_return_val_if_fail (player->playlist, FALSE);
 
   /* Get URI for next media */
-  path = melo_playlist_get_next (player->playlist, TRUE);
+  path = melo_playlist_get_next (player->playlist, &name, &tags, TRUE);
   if (!path)
     return FALSE;
 
   /* Play media */
-  ret = melo_player_webplayer_play (player, path, NULL, NULL, FALSE);
+  ret = melo_player_webplayer_play (player, path, name, tags, FALSE);
+  melo_tags_unref (tags);
+  g_free (name);
   g_free (path);
 
   return ret;
