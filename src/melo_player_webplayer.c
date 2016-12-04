@@ -47,10 +47,13 @@ static gboolean melo_player_webplayer_next (MeloPlayer *player);
 static MeloPlayerState melo_player_webplayer_set_state (MeloPlayer *player,
                                                         MeloPlayerState state);
 static gint melo_player_webplayer_set_pos (MeloPlayer *player, gint pos);
+static gdouble melo_player_webplayer_set_volume (MeloPlayer *player,
+                                                 gdouble volume);
 
 static MeloPlayerState melo_player_webplayer_get_state (MeloPlayer *player);
 static gchar *melo_player_webplayer_get_name (MeloPlayer *player);
 static gint melo_player_webplayer_get_pos (MeloPlayer *player, gint *duration);
+static gdouble melo_player_webplayer_get_volume (MeloPlayer *player);
 static MeloPlayerStatus *melo_player_webplayer_get_status (MeloPlayer *player);
 static gboolean melo_player_webplayer_get_cover (MeloPlayer *player,
                                                  GBytes **data, gchar **type);
@@ -68,6 +71,7 @@ struct _MeloPlayerWebPlayerPrivate {
   /* Gstreamer pipeline */
   GstElement *pipeline;
   GstElement *src;
+  GstElement *vol;
   guint bus_watch_id;
 
   /* Current thumbnail / cover art */
@@ -156,11 +160,13 @@ melo_player_webplayer_class_init (MeloPlayerWebPlayerClass *klass)
   pclass->next = melo_player_webplayer_next;
   pclass->set_state = melo_player_webplayer_set_state;
   pclass->set_pos = melo_player_webplayer_set_pos;
+  pclass->set_volume = melo_player_webplayer_set_volume;
 
   /* Status */
   pclass->get_state = melo_player_webplayer_get_state;
   pclass->get_name = melo_player_webplayer_get_name;
   pclass->get_pos = melo_player_webplayer_get_pos;
+  pclass->get_volume = melo_player_webplayer_get_volume;
   pclass->get_status = melo_player_webplayer_get_status;
   pclass->get_cover = melo_player_webplayer_get_cover;
 
@@ -186,18 +192,21 @@ melo_player_webplayer_init (MeloPlayerWebPlayer *self)
 
   /* Create new status handler */
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_NONE, NULL);
+  priv->status->volume = 1.0;
 
   /* Create pipeline */
   priv->pipeline = gst_pipeline_new ("webplayer_player_pipeline");
   priv->src = gst_element_factory_make ("uridecodebin",
                                         "webplayer_player_uridecodebin");
+  priv->vol = gst_element_factory_make ("volume", "webplayer_player_volume");
   sink = gst_element_factory_make ("autoaudiosink",
                                    "webplayer_player_autoaudiosink");
-  gst_bin_add_many (GST_BIN (priv->pipeline), priv->src, sink, NULL);
+  gst_bin_add_many (GST_BIN (priv->pipeline), priv->src, priv->vol, sink, NULL);
+  gst_element_link (priv->vol, sink);
 
   /* Add signal handler on new pad */
   g_signal_connect(priv->src, "pad-added",
-                   G_CALLBACK (pad_added_handler), sink);
+                   G_CALLBACK (pad_added_handler), priv->vol);
 
   /* Add a message handler */
   bus = gst_pipeline_get_bus (GST_PIPELINE (priv->pipeline));
@@ -730,6 +739,7 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
     name = _name;
   }
   priv->status = melo_player_status_new (MELO_PLAYER_STATE_PLAYING, name);
+  g_object_get (priv->vol, "volume", &priv->status->volume, NULL);
   if (tags)
     melo_player_status_take_tags (priv->status, melo_tags_copy (tags));
 
@@ -835,10 +845,42 @@ melo_player_webplayer_set_pos (MeloPlayer *player, gint pos)
   return melo_player_webplayer_get_pos (player, NULL);
 }
 
+static gdouble
+melo_player_webplayer_set_volume (MeloPlayer *player, gdouble volume)
+{
+  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Set volume */
+  priv->status->volume = volume;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  /* Set pipeline volume */
+  g_object_set (priv->vol, "volume", volume, NULL);
+
+  return volume;
+}
+
 static MeloPlayerState
 melo_player_webplayer_get_state (MeloPlayer *player)
 {
-  return (MELO_PLAYER_WEBPLAYER (player))->priv->status->state;
+  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+  MeloPlayerState state;
+
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Get state */
+  state = priv->status->state;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  return state;
 }
 
 static gchar *
@@ -865,15 +907,39 @@ melo_player_webplayer_get_pos (MeloPlayer *player, gint *duration)
   MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
   gint64 pos;
 
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
   /* Get duration */
   if (duration)
     *duration = priv->status->duration;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
 
   /* Get length */
   if (!gst_element_query_position (priv->pipeline, GST_FORMAT_TIME, &pos))
     pos = 0;
 
   return pos / 1000000;
+}
+
+static gdouble
+melo_player_webplayer_get_volume (MeloPlayer *player)
+{
+  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+  gdouble volume;
+
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Get volume */
+  volume = priv->status->volume;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  return volume;
 }
 
 static MeloPlayerStatus *
@@ -887,10 +953,12 @@ melo_player_webplayer_get_status (MeloPlayer *player)
 
   /* Copy status */
   status = melo_player_status_ref (priv->status);
-  status->pos = melo_player_webplayer_get_pos (player, NULL);
 
   /* Unlock player mutex */
   g_mutex_unlock (&priv->mutex);
+
+  /* Update position */
+  status->pos = melo_player_webplayer_get_pos (player, NULL);
 
   return status;
 }
