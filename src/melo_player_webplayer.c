@@ -20,6 +20,11 @@
  * Boston, MA  02110-1301, USA.
  */
 
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#include <glib-unix.h>
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <gst/gst.h>
@@ -107,7 +112,7 @@ melo_player_webplayer_finalize (GObject *gobject)
 
     /* Kill process */
     kill (priv->child_pid, SIGTERM);
-    waitpid (priv->child_pid);
+    waitpid (priv->child_pid, NULL, 0);
 
     /* Free ressources */
     g_spawn_close_pid (priv->child_pid);
