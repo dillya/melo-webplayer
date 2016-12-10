@@ -25,6 +25,7 @@
 #include <sys/wait.h>
 
 #include <glib-unix.h>
+#include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <libsoup/soup.h>
 #include <gst/gst.h>
@@ -236,9 +237,11 @@ static gpointer
 melo_player_webplayer_update_thread(gpointer user_data)
 {
   MeloPlayerWebPlayerPrivate *priv = user_data;
+  GStatBuf stat_buf;
   gchar *path = NULL;
   gchar *argv[5];
-  gboolean ret;
+  gint status = 0;
+  gboolean ret = FALSE;
 
   /* Check grabber directory (create if necessary) */
   if (g_mkdir_with_parents (priv->bin_path, 0700))
@@ -247,8 +250,9 @@ melo_player_webplayer_update_thread(gpointer user_data)
   /* Generate grabber file path */
   path = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER, priv->bin_path);
 
-  /* Check grabber */
-  if (g_file_test (path, G_FILE_TEST_EXISTS)) {
+  /* Launch an update of grabber */
+  if (g_file_test (path, G_FILE_TEST_EXISTS) && !g_stat (path, &stat_buf) &&
+      stat_buf.st_size) {
     /* Prepare update command */
     argv[0] = path;
     argv[1] = "--update";
@@ -257,8 +261,11 @@ melo_player_webplayer_update_thread(gpointer user_data)
     /* Update grabber */
     ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL |
                         G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, NULL, NULL,
-                        NULL, NULL);
-  } else {
+                        &status, NULL);
+  }
+
+  /* No grabber or update failed */
+  if (!ret || status) {
     /* Prepare download command */
     argv[0] = "wget";
     argv[1] = MELO_PLAYER_WEBPLAYER_GRABBER_URL;
