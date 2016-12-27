@@ -64,10 +64,14 @@ static MeloPlayerStatus *melo_player_webplayer_get_status (MeloPlayer *player);
 static gboolean melo_player_webplayer_get_cover (MeloPlayer *player,
                                                  GBytes **data, gchar **type);
 
+static gboolean melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp,
+                                               const gchar *path);
+
 struct _MeloPlayerWebPlayerPrivate {
   GMutex mutex;
   gchar *bin_path;
   gboolean updating;
+  gboolean uptodate;
 
   /* Status */
   MeloPlayerStatus *status;
@@ -236,7 +240,8 @@ melo_player_webplayer_set_bin_path (MeloPlayerWebPlayer *webp,
 static gpointer
 melo_player_webplayer_update_thread(gpointer user_data)
 {
-  MeloPlayerWebPlayerPrivate *priv = user_data;
+  MeloPlayerWebPlayer *webp = user_data;
+  MeloPlayerWebPlayerPrivate *priv = webp->priv;
   GStatBuf stat_buf;
   gchar *path = NULL;
   gchar *argv[5];
@@ -290,6 +295,19 @@ melo_player_webplayer_update_thread(gpointer user_data)
                         NULL, NULL, NULL, NULL, NULL, NULL);
   }
 
+  /* Grabber is up to date */
+  priv->uptodate = TRUE;
+
+  /* Lock player access */
+  g_mutex_lock (&priv->mutex);
+
+  /* Get URI */
+  if (priv->url && !priv->uri)
+    melo_player_webplayer_get_uri (webp, priv->url);
+
+  /* Unlock player access */
+  g_mutex_unlock (&priv->mutex);
+
 end:
   /* End of update */
   priv->updating = FALSE;
@@ -313,7 +331,7 @@ melo_player_webplayer_update_grabber (MeloPlayerWebPlayer *webp)
 
   /* Create thread */
   thread = g_thread_new ("webplayer_grabber_update",
-                         melo_player_webplayer_update_thread, priv);
+                         melo_player_webplayer_update_thread, webp);
   g_thread_unref (thread);
 }
 
@@ -743,7 +761,12 @@ melo_player_webplayer_play (MeloPlayer *player, const gchar *path,
   /* Get URI */
   g_free (priv->uri);
   priv->uri = NULL;
-  melo_player_webplayer_get_uri (webp, path);
+
+  /* Update grabber first if not up to date */
+  if (!priv->uptodate)
+    melo_player_webplayer_update_grabber (webp);
+  else
+    melo_player_webplayer_get_uri (webp, path);
 
   /* Create new status */
   if (!name) {
