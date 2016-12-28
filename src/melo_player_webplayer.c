@@ -281,8 +281,8 @@ melo_player_webplayer_update_thread(gpointer user_data)
     /* Download grabber */
     ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH |
                         G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                        NULL, NULL, NULL, NULL, NULL, NULL);
-    if (!ret)
+                        NULL, NULL, NULL, NULL, &status, NULL);
+    if (!ret || status)
       goto end;
 
     /* Prepare change mode command */
