@@ -36,6 +36,10 @@
 #define MELO_PLAYER_WEBPLAYER_GRABBER_URL \
     "https://yt-dl.org/downloads/latest/youtube-dl"
 
+#define MELO_PLAYER_WEBPLAYER_GRABBER_UNZIPED_DIR "output"
+#define MELO_PLAYER_WEBPLAYER_GRABBER_UNZIPED \
+    MELO_PLAYER_WEBPLAYER_GRABBER_UNZIPED_DIR "/__main__.py"
+
 #define MELO_PLAYER_WEBPLAYER_BUFFER_SIZE 8192
 
 static gboolean bus_call (GstBus *bus, GstMessage *msg, gpointer data);
@@ -242,8 +246,8 @@ melo_player_webplayer_update_thread(gpointer user_data)
 {
   MeloPlayerWebPlayer *webp = user_data;
   MeloPlayerWebPlayerPrivate *priv = webp->priv;
+  gchar *path = NULL, *out_path = NULL;
   GStatBuf stat_buf;
-  gchar *path = NULL;
   gchar *argv[5];
   gint status = 0;
   gboolean ret = FALSE;
@@ -254,6 +258,8 @@ melo_player_webplayer_update_thread(gpointer user_data)
 
   /* Generate grabber file path */
   path = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER, priv->bin_path);
+  out_path = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER_UNZIPED_DIR,
+                              priv->bin_path);
 
   /* Launch an update of grabber */
   if (g_file_test (path, G_FILE_TEST_EXISTS) && !g_stat (path, &stat_buf) &&
@@ -295,6 +301,31 @@ melo_player_webplayer_update_thread(gpointer user_data)
                         NULL, NULL, NULL, NULL, NULL, NULL);
   }
 
+  /* Extract grabber to output directory (youtube-dl is a collection of zipped
+   * python scripts and extracting and decompressing them before launching
+   * optimize speed execution up to 2x on some embedded board).
+   */
+  argv[0] = "unzip";
+  argv[1] = "-od";
+  argv[2] = out_path;
+  argv[3] = path;
+  argv[4] = NULL;
+  ret = g_spawn_sync (NULL, argv, NULL, G_SPAWN_SEARCH_PATH |
+                        G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                        NULL, NULL, NULL, NULL, &status, NULL);
+
+  /* Check unzip process
+   * HACK: with the grabber binary, unzip returns a warning by setting its code
+   * return to 1. However, on some platforms, the return code is shifted so we
+   * need to revert transformation to get final result and then discard
+   * warnings if needed.
+   */
+  if (status >= 256)
+    status /= 256;
+  if (!ret || status > 1)
+    g_warning ("player_webplayer: failed to decompress grabber scripts, "
+               "please check your 'unzip' version %d.", status);
+
   /* Grabber is up to date */
   priv->uptodate = TRUE;
 
@@ -311,6 +342,7 @@ melo_player_webplayer_update_thread(gpointer user_data)
 end:
   /* End of update */
   priv->updating = FALSE;
+  g_free (out_path);
   g_free (path);
 
   return NULL;
@@ -688,8 +720,16 @@ melo_player_webplayer_get_uri (MeloPlayerWebPlayer *webp, const gchar *path)
   }
 
   /* Prepare command to get media URI */
-  argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER,
+  argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER_UNZIPED,
                              priv->bin_path ? priv->bin_path : ".");
+  if (!g_file_test (argv[0], G_FILE_TEST_EXISTS)) {
+    /* Use compressed binary when uncompressed scripts are not available */
+    g_free (argv[0]);
+    argv[0] = g_strdup_printf ("%s/" MELO_PLAYER_WEBPLAYER_GRABBER,
+                               priv->bin_path ? priv->bin_path : ".");
+    g_warning ("player_webplayer: decompressed grabber scripts not found: "
+               "use compressed binary as fallback (run slower).");
+  }
   argv[1] = "--dump-json";
   argv[2] = g_strdup (path);
   argv[3] = NULL;
