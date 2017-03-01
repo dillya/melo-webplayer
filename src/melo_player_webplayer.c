@@ -1087,6 +1087,12 @@ melo_player_webplayer_get_status (MeloPlayer *player)
   /* Update position */
   status->pos = melo_player_webplayer_get_pos (player, NULL);
 
+  /* Update playlist status */
+  if (player->playlist) {
+    status->has_prev = melo_playlist_has_prev (player->playlist);
+    status->has_next = melo_playlist_has_next (player->playlist);
+  }
+
   return status;
 }
 
