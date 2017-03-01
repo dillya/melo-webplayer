@@ -59,6 +59,8 @@ static MeloPlayerState melo_player_webplayer_set_state (MeloPlayer *player,
 static gint melo_player_webplayer_set_pos (MeloPlayer *player, gint pos);
 static gdouble melo_player_webplayer_set_volume (MeloPlayer *player,
                                                  gdouble volume);
+static gboolean melo_player_webplayer_set_mute (MeloPlayer *player,
+                                                gboolean mute);
 
 static MeloPlayerState melo_player_webplayer_get_state (MeloPlayer *player);
 static gchar *melo_player_webplayer_get_name (MeloPlayer *player);
@@ -175,6 +177,7 @@ melo_player_webplayer_class_init (MeloPlayerWebPlayerClass *klass)
   pclass->set_state = melo_player_webplayer_set_state;
   pclass->set_pos = melo_player_webplayer_set_pos;
   pclass->set_volume = melo_player_webplayer_set_volume;
+  pclass->set_mute = melo_player_webplayer_set_mute;
 
   /* Status */
   pclass->get_state = melo_player_webplayer_get_state;
@@ -967,6 +970,26 @@ melo_player_webplayer_set_volume (MeloPlayer *player, gdouble volume)
   g_object_set (priv->vol, "volume", volume, NULL);
 
   return volume;
+}
+
+static gboolean
+melo_player_webplayer_set_mute (MeloPlayer *player, gboolean mute)
+{
+  MeloPlayerWebPlayerPrivate *priv = (MELO_PLAYER_WEBPLAYER (player))->priv;
+
+  /* Lock player mutex */
+  g_mutex_lock (&priv->mutex);
+
+  /* Set mute */
+  priv->status->mute = mute;
+
+  /* Unlock player mutex */
+  g_mutex_unlock (&priv->mutex);
+
+  /* Mute pipeline */
+  g_object_set (priv->vol, "mute", mute, NULL);
+
+  return mute;
 }
 
 static MeloPlayerState
