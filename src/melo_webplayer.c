@@ -101,7 +101,7 @@ melo_webplayer_init (MeloWebPlayer *self)
   priv->browser = melo_browser_new (MELO_TYPE_BROWSER_WEBPLAYER,
                                     "webplayer_browser");
   priv->player = melo_player_new (MELO_TYPE_PLAYER_WEBPLAYER,
-                                  "webplayer_player");
+                                  "webplayer_player", melo_webplayer_info.name);
   priv->playlist = melo_playlist_new (MELO_TYPE_PLAYLIST_SIMPLE,
                                       "webplayer_playlist");
 
