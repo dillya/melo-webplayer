@@ -264,7 +264,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
 {
   MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
   MeloBrowserYoutubePrivate  *priv = byoutube->priv;
-  static MeloBrowserList *list;
+  MeloBrowserList *list;
   const gchar *page_token = "";
   JsonArray *array;
   JsonObject *obj;
