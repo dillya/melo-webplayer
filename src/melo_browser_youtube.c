@@ -263,6 +263,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *input,
   MeloBrowserList *list;
   const gchar *page_token = "";
   const gchar *token;
+  const gchar *order;
   JsonArray *array;
   JsonObject *obj;
   guint count;
@@ -286,6 +287,25 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *input,
   else
     token = "";
 
+  /* Set order type from sort */
+  switch (params->sort) {
+    case MELO_SORT_TITLE:
+      order = "title";
+      break;
+    case MELO_SORT_DATE:
+      order = "date";
+      break;
+    case MELO_SORT_RATING:
+      order = "rating";
+      break;
+    case MELO_SORT_PLAY_COUNT:
+      order = "viewCount";
+      break;
+    case MELO_SORT_RELEVANT:
+    default:
+      order = "relevance";
+  }
+
   /* Generate URL */
   url = g_strdup_printf ("https://www.googleapis.com/youtube/v3/search?"
                          "part=snippet"
@@ -293,8 +313,9 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *input,
                          "&maxResults=%d"
                          "%s%s"
                          "&type=video"
+                         "&order=%s"
                          "&key=" MELO_BROWSER_YOUTUBE_API_KEY,
-                         input, count, page_token, token);
+                         input, count, page_token, token, order);
 
   /* Get JSON response object */
   obj = melo_browser_youtube_get_json_object (byoutube, url);
