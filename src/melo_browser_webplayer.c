@@ -38,10 +38,11 @@ static MeloBrowserInfo melo_browser_webplayer_info = {
 static const MeloBrowserInfo *melo_browser_webplayer_get_info (
                                                           MeloBrowser *browser);
 static gboolean melo_browser_webplayer_play (MeloBrowser *browser,
-                                             const gchar *path);
+                                           const gchar *path,
+                                           const MeloBrowserPlayParams *params);
 static gboolean melo_browser_webplayer_add (MeloBrowser *browser,
-                                            const gchar *path);
-
+                                            const gchar *path,
+                                            const MeloBrowserAddParams *params);
 G_DEFINE_TYPE (MeloBrowserWebPlayer, melo_browser_webplayer, MELO_TYPE_BROWSER)
 
 static void
@@ -67,13 +68,15 @@ melo_browser_webplayer_get_info (MeloBrowser *browser)
 }
 
 static gboolean
-melo_browser_webplayer_play (MeloBrowser *browser, const gchar *path)
+melo_browser_webplayer_play (MeloBrowser *browser, const gchar *path,
+                             const MeloBrowserPlayParams *params)
 {
   return melo_player_play (browser->player, path, NULL, NULL, TRUE);
 }
 
 static gboolean
-melo_browser_webplayer_add (MeloBrowser *browser, const gchar *path)
+melo_browser_webplayer_add (MeloBrowser *browser, const gchar *path,
+                            const MeloBrowserAddParams *params)
 {
   return melo_player_add (browser->player, path, NULL, NULL);
 }

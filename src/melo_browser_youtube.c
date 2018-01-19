@@ -46,19 +46,17 @@ static MeloBrowserInfo melo_browser_youtube_info = {
 static const MeloBrowserInfo *melo_browser_youtube_get_info (
                                                           MeloBrowser *browser);
 static MeloBrowserList *melo_browser_youtube_search (MeloBrowser *browser,
-                                                  const gchar *path,
-                                                  gint offset, gint count,
-                                                  const gchar *token,
-                                                  MeloBrowserTagsMode tags_mode,
-                                                  MeloTagsFields tags_fields);
+                                         const gchar *input,
+                                         const MeloBrowserSearchParams *params);
 static MeloTags *melo_browser_youtube_get_tags (MeloBrowser *browser,
                                                 const gchar *path,
                                                 MeloTagsFields fields);
 static gboolean melo_browser_youtube_play (MeloBrowser *browser,
-                                           const gchar *path);
+                                           const gchar *path,
+                                           const MeloBrowserPlayParams *params);
 static gboolean melo_browser_youtube_add (MeloBrowser *browser,
-                                          const gchar *path);
-
+                                          const gchar *path,
+                                          const MeloBrowserAddParams *params);
 static gboolean melo_browser_youtube_get_cover (MeloBrowser *browser,
                                                 const gchar *path,
                                                 GBytes **data, gchar **type);
@@ -257,17 +255,17 @@ melo_browser_youtube_gen_tags (MeloBrowserYoutube *byoutube, JsonObject *obj,
 }
 
 static MeloBrowserList *
-melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
-                             gint offset, gint count, const gchar *token,
-                             MeloBrowserTagsMode tags_mode,
-                             MeloTagsFields tags_fields)
+melo_browser_youtube_search (MeloBrowser *browser, const gchar *input,
+                             const MeloBrowserSearchParams *params)
 {
   MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
   MeloBrowserYoutubePrivate  *priv = byoutube->priv;
   MeloBrowserList *list;
   const gchar *page_token = "";
+  const gchar *token;
   JsonArray *array;
   JsonObject *obj;
+  guint count;
   gchar *url;
   gint i;
 
@@ -277,10 +275,12 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
     return NULL;
 
   /* Limit results count */
-  if (count > 50)
+  count = params->count;
+  if (!count || count > 50)
     count = 50;
 
   /* Generate pageToken query */
+  token = params->token;
   if (token && *token != '\0')
     page_token = "&pageToken=";
   else
@@ -294,7 +294,7 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
                          "%s%s"
                          "&type=video"
                          "&key=" MELO_BROWSER_YOUTUBE_API_KEY,
-                         path, count, page_token, token);
+                         input, count, page_token, token);
 
   /* Get JSON response object */
   obj = melo_browser_youtube_get_json_object (byoutube, url);
@@ -347,8 +347,9 @@ melo_browser_youtube_search (MeloBrowser *browser, const gchar *path,
     item->add = g_strdup ("Add to playlist");
 
     /* Generate MeloTags */
-    if (tags_mode != MELO_BROWSER_TAGS_MODE_NONE)
-      item->tags = melo_browser_youtube_gen_tags (byoutube, snip, tags_fields);
+    if (params->tags_mode != MELO_BROWSER_TAGS_MODE_NONE)
+      item->tags = melo_browser_youtube_gen_tags (byoutube, snip,
+                                                  params-> tags_fields);
 
     /* Add item to list */
     list->items = g_list_prepend (list->items, item);
@@ -443,7 +444,8 @@ melo_browser_youtube_get_tags (MeloBrowser *browser, const gchar *path,
 }
 
 static gboolean
-melo_browser_youtube_play (MeloBrowser *browser, const gchar *path)
+melo_browser_youtube_play (MeloBrowser *browser, const gchar *path,
+                           const MeloBrowserPlayParams *params)
 {
   MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
   gchar *title = NULL;
@@ -469,7 +471,8 @@ melo_browser_youtube_play (MeloBrowser *browser, const gchar *path)
 }
 
 static gboolean
-melo_browser_youtube_add (MeloBrowser *browser, const gchar *path)
+melo_browser_youtube_add (MeloBrowser *browser, const gchar *path,
+                          const MeloBrowserAddParams *params)
 {
   MeloBrowserYoutube *byoutube = MELO_BROWSER_YOUTUBE (browser);
   gchar *title = NULL;
