@@ -37,10 +37,7 @@ melo_webplayer_disable (void)
   return TRUE;
 }
 
-G_MODULE_EXPORT
-const MeloPlugin melo_plugin = {
-  .name = "WebPlayer",
-  .description = "Web based Player support for Melo",
-  .enable = melo_webplayer_enable,
-  .disable = melo_webplayer_disable,
-};
+DECLARE_MELO_PLUGIN ("WebPlayer",
+                     "Web based Player support for Melo",
+                     melo_webplayer_enable,
+                     melo_webplayer_disable);
