@@ -815,7 +815,7 @@ melo_player_webplayer_setup (MeloPlayer *player, const gchar *path,
   g_mutex_lock (&priv->mutex);
 
   /* Stop pipeline */
-  gst_element_set_state (priv->pipeline, GST_STATE_READY);
+  gst_element_set_state (priv->pipeline, GST_STATE_NULL);
   if (priv->cover) {
     g_bytes_unref (priv->cover);
     priv->cover = NULL;
