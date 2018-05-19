@@ -37,12 +37,11 @@ static MeloBrowserInfo melo_browser_webplayer_info = {
 
 static const MeloBrowserInfo *melo_browser_webplayer_get_info (
                                                           MeloBrowser *browser);
-static gboolean melo_browser_webplayer_play (MeloBrowser *browser,
-                                           const gchar *path,
-                                           const MeloBrowserPlayParams *params);
-static gboolean melo_browser_webplayer_add (MeloBrowser *browser,
-                                            const gchar *path,
-                                            const MeloBrowserAddParams *params);
+static gboolean melo_browser_webplayer_action (MeloBrowser *browser,
+                                         const gchar *path,
+                                         MeloBrowserItemAction action,
+                                         const MeloBrowserActionParams *params);
+
 G_DEFINE_TYPE (MeloBrowserWebPlayer, melo_browser_webplayer, MELO_TYPE_BROWSER)
 
 static void
@@ -52,8 +51,7 @@ melo_browser_webplayer_class_init (MeloBrowserWebPlayerClass *klass)
   GObjectClass *oclass = G_OBJECT_CLASS (klass);
 
   bclass->get_info = melo_browser_webplayer_get_info;
-  bclass->play = melo_browser_webplayer_play;
-  bclass->add = melo_browser_webplayer_add;
+  bclass->action = melo_browser_webplayer_action;
 }
 
 static void
@@ -68,15 +66,19 @@ melo_browser_webplayer_get_info (MeloBrowser *browser)
 }
 
 static gboolean
-melo_browser_webplayer_play (MeloBrowser *browser, const gchar *path,
-                             const MeloBrowserPlayParams *params)
+melo_browser_webplayer_action (MeloBrowser *browser, const gchar *path,
+                               MeloBrowserItemAction action,
+                               const MeloBrowserActionParams *params)
 {
-  return melo_player_play (browser->player, path, NULL, NULL, TRUE);
+  switch (action) {
+    case MELO_BROWSER_ITEM_ACTION_ADD:
+      return melo_player_add (browser->player, path, NULL, NULL);
+    case MELO_BROWSER_ITEM_ACTION_PLAY:
+      return melo_player_play (browser->player, path, NULL, NULL, TRUE);
+    default:
+      ;
+  }
+
+  return FALSE;
 }
 
-static gboolean
-melo_browser_webplayer_add (MeloBrowser *browser, const gchar *path,
-                            const MeloBrowserAddParams *params)
-{
-  return melo_player_add (browser->player, path, NULL, NULL);
-}
