@@ -89,11 +89,6 @@ struct _MeloPlayerWebPlayerPrivate {
   MeloSink *sink;
   guint bus_watch_id;
 
-  /* Current thumbnail / cover art */
-  gboolean has_gst_cover;
-  GBytes *cover;
-  gchar *cover_type;
-
   /* HTTP client */
   SoupSession *session;
 
@@ -134,11 +129,6 @@ melo_player_webplayer_finalize (GObject *gobject)
 
   /* Free HTTP client */
   g_object_unref (priv->session);
-
-  /* Free cover */
-  if (priv->cover)
-    g_bytes_unref (priv->cover);
-  g_free (priv->cover_type);
 
   /* Stop pipeline */
   gst_element_set_state (priv->pipeline, GST_STATE_NULL);
@@ -411,14 +401,8 @@ bus_call (GstBus *bus, GstMessage *msg, gpointer data)
       gst_message_parse_tag (msg, &tags);
 
       /* Fill MeloTags with GstTagList */
-      mtags = melo_tags_new_from_gst_tag_list (tags, MELO_TAGS_FIELDS_FULL);
-
-      /* Add cover if available */
-      priv->has_gst_cover = melo_tags_has_cover (mtags);
-      if (priv->cover && !priv->has_gst_cover) {
-        melo_tags_set_cover (mtags, priv->cover, priv->cover_type);
-        melo_tags_set_cover_url (mtags, G_OBJECT (webp), NULL, NULL);
-      }
+      mtags = melo_tags_new_from_gst_tag_list (tags, MELO_TAGS_FIELDS_FULL,
+                                               MELO_TAGS_COVER_PERSIST_NONE);
 
       /* Merge with old tags */
       otags = melo_player_get_tags (player);
@@ -641,46 +625,6 @@ end:
 }
 
 static void
-on_request_done (SoupSession *session, SoupMessage *msg, gpointer user_data)
-{
-  MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
-  MeloPlayerWebPlayerPrivate *priv = webp->priv;
-  MeloPlayer *player = MELO_PLAYER (webp);
-  GBytes *cover = NULL;
-  const gchar *type;
-  MeloTags *tags;
-
-  /* Get content type */
-  type = soup_message_headers_get_one (msg->response_headers, "Content-Type");
-
-  /* Get thumnail */
-  g_object_get (msg, "response-body-data", &cover, NULL);
-
-  /* Lock status */
-  g_mutex_lock (&priv->mutex);
-
-  /* Change thumbnail and type */
-  if (priv->cover)
-    g_bytes_unref (priv->cover);
-  priv->cover = cover;
-  g_free (priv->cover_type);
-
-  /* Set cover if not provided by gstreamer */
-  if (!priv->has_gst_cover) {
-    /* Set cover into current player tags */
-    tags = melo_player_get_tags (player);
-    if (tags) {
-        melo_tags_set_cover (tags, cover, type);
-        melo_tags_set_cover_url (tags, G_OBJECT (webp), NULL, NULL);
-        melo_player_take_status_tags (player, tags);
-      }
-  }
-
-  /* Unlock status */
-  g_mutex_unlock (&priv->mutex);
-}
-
-static void
 on_child_exited (GPid pid, gint status, gpointer user_data)
 {
   MeloPlayerWebPlayer *webp = MELO_PLAYER_WEBPLAYER (user_data);
@@ -697,22 +641,38 @@ on_child_exited (GPid pid, gint status, gpointer user_data)
     /* Get URI from website player */
     priv->uri = melo_player_webplayer_parse_json (priv, &thumb_url);
 
+    /* Use tumbnail for cover */
+    if (thumb_url) {
+      MeloTags *tags;
+
+      /* Create a new tags */
+      tags = melo_tags_new ();
+      if (tags) {
+        MeloTags *otags;
+
+        /* Set thumbnail URL */
+        melo_tags_set_cover_by_url (tags, thumb_url,
+                                    MELO_TAGS_COVER_PERSIST_NONE);
+
+        /* Merge current tags */
+        otags = melo_player_get_tags (player);
+        if (otags) {
+          melo_tags_merge (tags, otags);
+          melo_tags_unref (otags);
+        }
+
+        /* Set new tags to player status */
+        melo_player_take_status_tags (player, tags);
+      }
+      g_free (thumb_url);
+    }
+
     /* Set new location to src element */
     g_object_set (priv->src, "uri", priv->uri, NULL);
     if (!priv->load)
       gst_element_set_state (priv->pipeline, GST_STATE_PLAYING);
     else if (melo_player_get_state (player) != MELO_PLAYER_STATE_STOPPED)
       gst_element_set_state (priv->pipeline, GST_STATE_PAUSED);
-
-    /* Get thumbnail */
-    if (thumb_url) {
-      SoupMessage *msg;
-
-     /* Download thumbnail */
-      msg = soup_message_new ("GET", thumb_url);
-      soup_session_queue_message (priv->session, msg, on_request_done, webp);
-      g_free (thumb_url);
-    }
   }
 
   /* Reset PID */
@@ -816,13 +776,6 @@ melo_player_webplayer_setup (MeloPlayer *player, const gchar *path,
 
   /* Stop pipeline */
   gst_element_set_state (priv->pipeline, GST_STATE_NULL);
-  if (priv->cover) {
-    g_bytes_unref (priv->cover);
-    priv->cover = NULL;
-  }
-  g_free (priv->cover_type);
-  priv->has_gst_cover = FALSE;
-  priv->cover_type = NULL;
 
   /* Replace URL */
   g_free (priv->url);

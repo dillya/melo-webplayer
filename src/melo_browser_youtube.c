@@ -55,9 +55,6 @@ static gboolean melo_browser_youtube_action (MeloBrowser *browser,
                                          const gchar *path,
                                          MeloBrowserItemAction action,
                                          const MeloBrowserActionParams *params);
-static gboolean melo_browser_youtube_get_cover (MeloBrowser *browser,
-                                                const gchar *path,
-                                                GBytes **data, gchar **type);
 
 struct _MeloBrowserYoutubePrivate {
   GMutex mutex;
@@ -93,8 +90,6 @@ melo_browser_youtube_class_init (MeloBrowserYoutubeClass *klass)
   bclass->search = melo_browser_youtube_search;
   bclass->get_tags = melo_browser_youtube_get_tags;
   bclass->action = melo_browser_youtube_action;
-
-  bclass->get_cover = melo_browser_youtube_get_cover;
 
   /* Add custom finalize() function */
   oclass->finalize = melo_browser_youtube_finalize;
@@ -209,44 +204,8 @@ melo_browser_youtube_gen_tags (MeloBrowserYoutube *byoutube, JsonObject *obj,
   }
 
   /* Add thumbnail to MeloTags */
-  if (thumb) {
-    /* Add as cover URL */
-    if (fields & MELO_TAGS_FIELDS_COVER_URL) {
-      const gchar *path;
-
-      /* Get image path */
-      path = strstr (thumb, MELO_BROWSER_YOUTUBE_THUMB_HOST);
-      if (path)
-        path += sizeof (MELO_BROWSER_YOUTUBE_THUMB_HOST);
-
-      /* Set cover URL */
-      melo_tags_set_cover_url (tags, G_OBJECT (byoutube), path,
-                               MELO_BROWSER_YOUTUBE_THUMB_TYPE);
-    }
-
-    /* Add as cover */
-    if (fields & MELO_TAGS_FIELDS_COVER) {
-      SoupMessage *msg;
-
-      /* Prepare HTTP request */
-      msg = soup_message_new ("GET", thumb);
-      if (msg) {
-        /* Download thumbnail */
-        if (soup_session_send_message (byoutube->priv->session, msg) == 200) {
-          GBytes *cover = NULL;
-
-          /* Create cover */
-          g_object_get (msg, "response-body-data", &cover, NULL);
-
-          /* Add cover to tags */
-          melo_tags_take_cover (tags, cover, MELO_BROWSER_YOUTUBE_THUMB_TYPE);
-        }
-
-        /* Free message */
-        g_object_unref (msg);
-      }
-    }
-  }
+  if (thumb && fields & MELO_TAGS_FIELDS_COVER)
+    melo_tags_set_cover_by_url (tags, thumb, MELO_TAGS_COVER_PERSIST_EXIT);
 
   return tags;
 }
