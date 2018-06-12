@@ -368,6 +368,8 @@ melo_player_webplayer_update_grabber (MeloPlayerWebPlayer *webp)
   thread = g_thread_new ("webplayer_grabber_update",
                          melo_player_webplayer_update_thread, webp);
   g_thread_unref (thread);
+
+  return TRUE;
 }
 
 static gboolean
