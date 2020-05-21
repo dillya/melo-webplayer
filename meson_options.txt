@@ -1,0 +1,2 @@
+# Module options
+option('youtube_api_key', type : 'string', description : 'Youtube API key')
