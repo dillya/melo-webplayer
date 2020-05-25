@@ -15,6 +15,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA.
  */
 
+#include <Python.h>
+
 #include <melo/melo_http_client.h>
 
 #define MELO_LOG_TAG "webplayer_player"
@@ -25,9 +27,9 @@
 #define MELO_WEBPLAYER_PLAYER_GRABBER "youtube-dl"
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION "version"
 
-#define MELO_WEBPLAYER_PLAYER_GRABBER_FINAL_DIR "output"
-#define MELO_WEBPLAYER_PLAYER_GRABBER_FINAL \
-  MELO_WEBPLAYER_PLAYER_GRABBER_FINAL_DIR "/__main__.py"
+#define MELO_WEBPLAYER_PLAYER_GRABBER_PATH "output"
+#define MELO_WEBPLAYER_PLAYER_GRABBER_MODULE "youtube_dl"
+#define MELO_WEBPLAYER_PLAYER_GRABBER_CLASS "YoutubeDL"
 
 #define MELO_WEBPLAYER_PLAYER_GRABBER_URL \
   "https://yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
@@ -49,15 +51,25 @@ struct _MeloWebplayerPlayer {
   char *url;
 
   GSubprocess *process;
-  GCancellable *cancel;
+
+  GThread *thread;
+  bool stop;
+  GAsyncQueue *queue;
+
+  PyObject *module;
+  PyObject *instance;
 };
 
 MELO_DEFINE_PLAYER (MeloWebplayerPlayer, melo_webplayer_player)
+
+static char *melo_webplayer_player_empty_url = "";
 
 static gboolean bus_cb (GstBus *bus, GstMessage *msg, gpointer data);
 static void pad_added_cb (GstElement *src, GstPad *pad, GstElement *sink);
 
 static void melo_webplayer_player_update_grabber (MeloWebplayerPlayer *player);
+
+static gpointer melo_webplayer_player_thread_func (gpointer user_data);
 
 static bool melo_webplayer_player_play (MeloPlayer *player, const char *url);
 static bool melo_webplayer_player_set_state (
@@ -76,11 +88,6 @@ melo_webplayer_player_finalize (GObject *object)
     g_subprocess_force_exit (player->process);
     g_object_unref (player->process);
   }
-  /* Cancel previous JSON parsing */
-  if (player->cancel) {
-    g_cancellable_cancel (player->cancel);
-    g_object_unref (player->cancel);
-  }
 
   /* Free pending URL */
   g_free (player->url);
@@ -90,6 +97,21 @@ melo_webplayer_player_finalize (GObject *object)
 
   /* Release HTTP client */
   g_object_unref (player->client);
+
+  /* Stop thread */
+  player->stop = true;
+  g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
+  g_thread_join (player->thread);
+
+  /* Release queue */
+  g_async_queue_unref (player->queue);
+
+  /* Release python objects */
+  Py_XDECREF (player->instance);
+  Py_XDECREF (player->module);
+
+  /* Finalize python */
+  Py_Finalize ();
 
   /* Free path */
   g_free (player->path);
@@ -126,6 +148,8 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
 {
   GstElement *sink;
   GstBus *bus;
+  wchar_t *path;
+  size_t len;
 
   /* Create pipeline */
   self->pipeline = gst_pipeline_new (MELO_WEBPLAYER_PLAYER_ID "_pipeline");
@@ -148,6 +172,28 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
       g_get_user_data_dir (), "melo", "webplayer", "bin", NULL);
   if (self->path)
     g_mkdir_with_parents (self->path, 0700);
+
+  /* Generate python path */
+  len = wcslen (Py_GetPath ()) + strlen (self->path) +
+        sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
+  path = malloc (len * sizeof (*path));
+  swprintf (path, len, L"%s/%s:%ls", self->path,
+      MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
+  MELO_LOGW ("%ls", path);
+
+  /* Set python path */
+  Py_SetPath (path);
+  free (path);
+
+  /* Initialize python */
+  Py_Initialize ();
+
+  /* Create async queue */
+  self->queue = g_async_queue_new_full (g_free);
+
+  /* Start thread */
+  self->thread = g_thread_new (
+      "webplayer_thread", melo_webplayer_player_thread_func, self);
 
   /* Create HTTP client */
   self->client = melo_http_client_new (NULL);
@@ -229,7 +275,8 @@ end:
     melo_webplayer_player_play (MELO_PLAYER (player), player->url);
     g_free (player->url);
     player->url = NULL;
-  }
+  } else
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
 }
 
 static void
@@ -243,14 +290,15 @@ update_cb (MeloHttpClient *client, unsigned int code, const char *data,
   /* Failed to download update */
   if (code != 200) {
     MELO_LOGE ("failed to download latest version");
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
     return;
   }
 
   /* Generate grabber file path */
   file = g_build_filename (player->path, MELO_WEBPLAYER_PLAYER_GRABBER, NULL);
-  output = g_build_filename (
-      player->path, MELO_WEBPLAYER_PLAYER_GRABBER_FINAL_DIR, NULL);
+  output =
+      g_build_filename (player->path, MELO_WEBPLAYER_PLAYER_GRABBER_PATH, NULL);
 
   /* Remove script header */
   if (data && size > 0 && data[0] == '#') {
@@ -267,6 +315,7 @@ update_cb (MeloHttpClient *client, unsigned int code, const char *data,
   /* Save file */
   if (!g_file_set_contents (file, data, size, &error)) {
     MELO_LOGE ("failed to save file: %s", error->message);
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
     g_error_free (error);
     goto end;
@@ -278,6 +327,7 @@ update_cb (MeloHttpClient *client, unsigned int code, const char *data,
       &error, "unzip", "-od", output, file, NULL);
   if (!player->process) {
     MELO_LOGE ("failed to unzip: %s", error->message);
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
     g_error_free (error);
   } else
@@ -301,6 +351,7 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
   /* Failed to get version */
   if (code != 200) {
     MELO_LOGE ("failed to get latest version");
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
     return;
   }
@@ -324,8 +375,10 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
 
     /* Free version */
     g_free (version);
-  } else
+  } else {
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
+  }
 
   /* Free string */
   g_free (file);
@@ -456,85 +509,154 @@ pad_added_cb (GstElement *src, GstPad *pad, GstElement *sink)
   gst_pad_link (pad, sink_pad);
   g_object_unref (sink_pad);
 }
-static void
-json_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
+
+static gpointer
+melo_webplayer_player_thread_func (gpointer user_data)
 {
-  JsonParser *parser = JSON_PARSER (source_object);
   MeloWebplayerPlayer *player = user_data;
-  const char *url = NULL;
 
-  /* Pparser is ready */
-  if (json_parser_load_from_stream_finish (parser, res, NULL)) {
-    unsigned int abr = 0;
-    JsonObject *obj;
-    JsonNode *node;
+  while (!player->stop) {
+    PyObject *result;
+    const char *uri = NULL;
+    char *url, *p;
 
-    /* Get root node and object */
-    node = json_parser_get_root (parser);
-    obj = json_node_get_object (node);
+    /* Wait next URL */
+    url = g_async_queue_pop (player->queue);
+    while ((p = g_async_queue_try_pop (player->queue)) != NULL) {
+      g_free (url);
+      url = p;
+    }
+    if (url == melo_webplayer_player_empty_url)
+      url = NULL;
 
-    /* Parse available formats */
-    if (json_object_has_member (obj, "formats")) {
-      unsigned int i, count;
-      JsonArray *array;
-
-      /* Get formats array */
-      array = json_object_get_array_member (obj, "formats");
-      count = json_array_get_length (array);
-
-      /* Parse formats arrasy */
-      for (i = 0; i < count; i++) {
-        const char *codec;
-        JsonObject *fmt;
-        gint br;
-
-        /* Get next format */
-        fmt = json_array_get_object_element (array, i);
-        if (!fmt)
-          continue;
-
-        /* Get audio codec */
-        if (!json_object_has_member (fmt, "acodec") ||
-            (codec = json_object_get_string_member (fmt, "acodec")) == NULL ||
-            !strcmp (codec, "none"))
-          continue;
-
-        /* Get audio bitrate */
-        if (json_object_has_member (fmt, "abr") &&
-            (br = json_object_get_int_member (fmt, "abr")) > abr &&
-            json_object_has_member (fmt, "url")) {
-          abr = br;
-          url = g_strdup (json_object_get_string_member (fmt, "url"));
-        }
-      }
+    /* Stop thread */
+    if (player->stop) {
+      g_free (url);
+      break;
     }
 
-    MELO_LOGD ("best audio bitrate found: %u", abr);
+    /* Import module */
+    if (!player->module) {
+      PyObject *name;
+
+      /* Create module name */
+      name = PyUnicode_FromString (MELO_WEBPLAYER_PLAYER_GRABBER_MODULE);
+
+      /* Import module */
+      player->module = PyImport_Import (name);
+      if (!player->module) {
+        MELO_LOGE ("failed to import module");
+        g_free (url);
+        continue;
+      }
+      Py_DECREF (name);
+
+      MELO_LOGD ("module imported");
+    }
+
+    /* Instantiate object */
+    if (!player->instance) {
+      PyObject *dict, *class;
+
+      /* Get module dictionary */
+      dict = PyModule_GetDict (player->module);
+      if (!dict) {
+        MELO_LOGE ("failed to get module dictionary");
+        g_free (url);
+        continue;
+      }
+
+      /* Get class from module */
+      class = PyDict_GetItemString (dict, MELO_WEBPLAYER_PLAYER_GRABBER_CLASS);
+      if (!class) {
+        MELO_LOGE ("failed to get class");
+        g_free (url);
+        continue;
+      }
+
+      /* Create object instance */
+      player->instance = PyObject_CallObject (class, NULL);
+      if (!player->instance) {
+        MELO_LOGE ("failed to instantiate object");
+        g_free (url);
+        continue;
+      }
+      MELO_LOGD ("object instantiated");
+    }
+
+    /* No video to get */
+    if (!url)
+      continue;
+
+    /* Get video info */
+    result =
+        PyObject_CallMethod (player->instance, "extract_info", "(sb)", url, 0);
+    if (result) {
+      unsigned int abr = 0;
+      PyObject *formats;
+      /* Get formats */
+      formats = PyDict_GetItemString (result, "formats");
+      if (PyList_Check (formats)) {
+        unsigned int i, count;
+
+        /* Get formats count */
+        count = PyList_Size (formats);
+
+        /* Parse formats list */
+        for (i = 0; i < count; i++) {
+          PyObject *fmt, *tmp;
+          unsigned int br;
+
+          /* Get next format */
+          fmt = PyList_GetItem (formats, i);
+          if (!fmt)
+            continue;
+
+          /* Get audio codec */
+          tmp = PyDict_GetItemString (fmt, "acodec");
+          if (!tmp || !strcmp (PyUnicode_AsUTF8 (tmp), "none"))
+            continue;
+
+          /* Get audio bitrate */
+          tmp = PyDict_GetItemString (fmt, "abr");
+          if (!tmp || (br = PyLong_AsLong (tmp)) < abr)
+            continue;
+
+          /* Get URL */
+          tmp = PyDict_GetItemString (fmt, "url");
+          if (!tmp)
+            continue;
+
+          /* Set best audio format */
+          abr = br;
+          uri = g_strdup (PyUnicode_AsUTF8 (tmp));
+        }
+      }
+      MELO_LOGD ("best audio bitrate found: %u", abr);
+      Py_DECREF (result);
+    }
+
+    /* Audio stream found */
+    if (uri) {
+      /* Set new webplayer URI */
+      g_object_set (player->src, "uri", uri, NULL);
+
+      /* Start playing */
+      gst_element_set_state (player->pipeline, GST_STATE_PLAYING);
+    } else {
+      melo_player_update_state (
+          MELO_PLAYER (player), MELO_PLAYER_STATE_STOPPED);
+      melo_player_error (MELO_PLAYER (player), "video not found");
+    }
   }
 
-  /* Audio stream found */
-  if (url) {
-    /* Set new webplayer URI */
-    g_object_set (player->src, "uri", url, NULL);
-
-    /* Start playing */
-    gst_element_set_state (player->pipeline, GST_STATE_PLAYING);
-  } else {
-    melo_player_update_state (MELO_PLAYER (player), MELO_PLAYER_STATE_STOPPED);
-    melo_player_error (MELO_PLAYER (player), "video not found");
-  }
-
-  /* Release parser */
-  g_object_unref (parser);
+  return NULL;
 }
 
 static bool
 melo_webplayer_player_play (MeloPlayer *player, const char *url)
 {
   MeloWebplayerPlayer *wplayer = MELO_WEBPLAYER_PLAYER (player);
-  GError *error = NULL;
-  JsonParser *parser;
-  char *prog;
 
   /* Stop previously playing webplayer */
   gst_element_set_state (wplayer->pipeline, GST_STATE_NULL);
@@ -547,53 +669,8 @@ melo_webplayer_player_play (MeloPlayer *player, const char *url)
     return true;
   }
 
-  /* Kill previous process */
-  if (wplayer->process) {
-    g_subprocess_force_exit (wplayer->process);
-    g_object_unref (wplayer->process);
-  }
-
-  /* Cancel previous JSON parsing */
-  if (wplayer->cancel) {
-    g_cancellable_cancel (wplayer->cancel);
-    g_object_unref (wplayer->cancel);
-  }
-  wplayer->cancel = g_cancellable_new ();
-
-  /* Create program file path */
-  prog = g_build_filename (
-      wplayer->path, MELO_WEBPLAYER_PLAYER_GRABBER_FINAL, NULL);
-  if (!g_file_test (prog, G_FILE_TEST_EXISTS)) {
-    MELO_LOGW ("execute zipped grabber (slower)");
-
-    /* Unzipped program not found */
-    g_free (prog);
-    prog =
-        g_build_filename (wplayer->path, MELO_WEBPLAYER_PLAYER_GRABBER, NULL);
-  }
-
-  /* Execute program to get final URL */
-  wplayer->process = g_subprocess_new (
-      G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
-      &error, prog, "--dump-json", url, NULL);
-  if (!wplayer->process) {
-    MELO_LOGE ("failed to launch grabber: %s", error->message);
-    melo_player_error (player, error->message);
-    g_error_free (error);
-    g_free (prog);
-    return false;
-  }
-
-  /* Create JSON parser */
-  parser = json_parser_new ();
-
-  /* Parse program stdout as JSON */
-  json_parser_load_from_stream_async (parser,
-      g_subprocess_get_stdout_pipe (wplayer->process), wplayer->cancel, json_cb,
-      wplayer);
-
-  /* Free program file path */
-  g_free (prog);
+  /* Add URL to queue */
+  g_async_queue_push (wplayer->queue, g_strdup (url));
 
   return true;
 }

@@ -18,11 +18,12 @@ src = [
 # Library dependencies
 libmelo_dep = dependency('melo', version : '>=1.0.0')
 libmelo_proto_dep = dependency('melo_proto', version : '>=1.0.0')
+libpython3_dep = dependency('python3', version : '>=3.3.0')
 
 # Generate module
 shared_library(
 	'melo_webplayer',
 	src,
-	dependencies : [libmelo_dep, libmelo_proto_dep],
+	dependencies : [libmelo_dep, libmelo_proto_dep, libpython3_dep],
 	install : true,
 	install_dir : libmelo_dep.get_pkgconfig_variable('moduledir'))
