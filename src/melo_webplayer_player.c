@@ -556,7 +556,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
 
     /* Instantiate object */
     if (!player->instance) {
-      PyObject *dict, *class;
+      PyObject *dict, *class, *args;
 
       /* Get module dictionary */
       dict = PyModule_GetDict (player->module);
@@ -574,8 +574,19 @@ melo_webplayer_player_thread_func (gpointer user_data)
         continue;
       }
 
+      /* Prepare instance arguments
+       *  - quiet=True (prevent that method call fails when running as daemon)
+       */
+      args = Py_BuildValue ("({s:i})", "quiet", Py_False);
+      if (!args) {
+        MELO_LOGE ("failed to create instance args");
+        g_free (url);
+        continue;
+      }
+
       /* Create object instance */
-      player->instance = PyObject_CallObject (class, NULL);
+      player->instance = PyObject_CallObject (class, args);
+      Py_DECREF (args);
       if (!player->instance) {
         MELO_LOGE ("failed to instantiate object");
         g_free (url);
