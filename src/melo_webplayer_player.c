@@ -603,11 +603,13 @@ melo_webplayer_player_thread_func (gpointer user_data)
     result =
         PyObject_CallMethod (player->instance, "extract_info", "(sb)", url, 0);
     if (result) {
-      unsigned int abr = 0;
       PyObject *formats;
+
       /* Get formats */
       formats = PyDict_GetItemString (result, "formats");
       if (PyList_Check (formats)) {
+        const char *v_uri = NULL, *a_uri = NULL;
+        unsigned int v_abr = 0, a_abr = 0;
         unsigned int i, count;
 
         /* Get formats count */
@@ -630,21 +632,40 @@ melo_webplayer_player_thread_func (gpointer user_data)
 
           /* Get audio bitrate */
           tmp = PyDict_GetItemString (fmt, "abr");
-          if (!tmp || (br = PyLong_AsLong (tmp)) < abr)
+          if (!tmp)
             continue;
+          br = PyLong_AsLong (tmp);
 
           /* Get URL */
           tmp = PyDict_GetItemString (fmt, "url");
           if (!tmp)
             continue;
+          uri = PyUnicode_AsUTF8 (tmp);
 
-          /* Set best audio format */
-          abr = br;
-          uri = g_strdup (PyUnicode_AsUTF8 (tmp));
+          /* Get video codec */
+          tmp = PyDict_GetItemString (fmt, "vcodec");
+          if (tmp && strcmp (PyUnicode_AsUTF8 (tmp), "none")) {
+            if (br > v_abr) {
+              v_abr = br;
+              v_uri = uri;
+            }
+          } else {
+            if (br > a_abr) {
+              a_abr = br;
+              a_uri = uri;
+            }
+          }
         }
+
+        /* Select best URL (first audio track only, then video tack) */
+        if (a_uri)
+          uri = a_uri;
+        else if (v_uri)
+          uri = v_uri;
+        else
+          uri = NULL;
+        MELO_LOGD ("best audio track found: %u %u", a_abr, v_abr);
       }
-      MELO_LOGD ("best audio bitrate found: %u", abr);
-      Py_DECREF (result);
     }
 
     /* Audio stream found */
@@ -659,6 +680,9 @@ melo_webplayer_player_thread_func (gpointer user_data)
           MELO_PLAYER (player), MELO_PLAYER_STATE_STOPPED);
       melo_player_error (MELO_PLAYER (player), "video not found");
     }
+
+    /* Release result */
+    Py_XDECREF (result);
   }
 
   return NULL;
