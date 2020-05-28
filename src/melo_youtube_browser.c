@@ -347,8 +347,6 @@ melo_youtube_browser_get_media_list (MeloYoutubeBrowser *browser,
       "&key=" MELO_YOUTUBE_BROWSER_API_KEY,
       query, r->count, token ? "&pageToken=" : "", token, order);
 
-  MELO_LOGD ("get_media_list: %s", url);
-
   /* Get list from URL */
   ret = melo_http_client_get_json (browser->client, url, list_cb, req);
   g_free (url);

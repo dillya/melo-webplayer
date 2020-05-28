@@ -185,7 +185,6 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   path = malloc (len * sizeof (*path));
   swprintf (path, len, L"%s/%s:%ls", self->path,
       MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
-  MELO_LOGW ("%ls", path);
 
   /* Set python path */
   Py_SetPath (path);
