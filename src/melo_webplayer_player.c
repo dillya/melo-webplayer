@@ -150,7 +150,7 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   GstCaps *caps;
   GstBus *bus;
   wchar_t *path;
-  size_t len;
+  size_t len = 0;
 
   /* Create pipeline */
   self->pipeline = gst_pipeline_new (MELO_WEBPLAYER_PLAYER_ID "_pipeline");
@@ -176,12 +176,14 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   /* Create binary path */
   self->path = g_build_filename (
       g_get_user_data_dir (), "melo", "webplayer", "bin", NULL);
-  if (self->path)
+  if (self->path) {
+    len = strlen (self->path);
     g_mkdir_with_parents (self->path, 0700);
+  }
 
   /* Generate python path */
-  len = wcslen (Py_GetPath ()) + strlen (self->path) +
-        sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
+  len +=
+      wcslen (Py_GetPath ()) + sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
   path = malloc (len * sizeof (*path));
   swprintf (path, len, L"%s/%s:%ls", self->path,
       MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
@@ -377,15 +379,13 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
     /* Download new version */
     melo_http_client_get (
         player->client, MELO_WEBPLAYER_PLAYER_GRABBER_URL, update_cb, player);
-
-    /* Free version */
-    g_free (version);
   } else {
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
   }
 
   /* Free string */
+  g_free (version);
   g_free (file);
 }
 
