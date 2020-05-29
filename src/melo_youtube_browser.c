@@ -98,15 +98,21 @@ melo_youtube_browser_get_cover (JsonObject *obj)
   if (!obj)
     return NULL;
 
-  /* Find best thumbnail */
-  if (json_object_has_member (obj, "standard"))
-    thumb = json_object_get_object_member (obj, "standard");
+  /* Find best thumbnail
+   *  - default: 120,
+   *  - medium: 320,
+   *  - high: 480,
+   *  - standard: 640,
+   *  - maxres: 1280.
+   */
+  if (json_object_has_member (obj, "medium"))
+    thumb = json_object_get_object_member (obj, "medium");
   else if (json_object_has_member (obj, "high"))
     thumb = json_object_get_object_member (obj, "high");
-  else if (json_object_has_member (obj, "medium"))
-    thumb = json_object_get_object_member (obj, "medium");
   else if (json_object_has_member (obj, "default"))
     thumb = json_object_get_object_member (obj, "default");
+  else if (json_object_has_member (obj, "standard"))
+    thumb = json_object_get_object_member (obj, "standard");
   else if (json_object_has_member (obj, "maxres"))
     thumb = json_object_get_object_member (obj, "maxres");
   else
