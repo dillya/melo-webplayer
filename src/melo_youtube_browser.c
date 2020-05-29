@@ -250,6 +250,7 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
 
       /* Init media item */
       browser__response__media_item__init (&items[i]);
+      tags__tags__init (&tags[i]);
       media_list.items[i] = &items[i];
 
       /* Get next entry */
@@ -273,7 +274,6 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
       items[i].actions = actions_ptr;
 
       /* Set tags */
-      tags__tags__init (&tags[i]);
       items[i].tags = &tags[i];
 
       /* Set title */
@@ -290,6 +290,11 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
     msg = melo_message_new (browser__response__get_packed_size (&resp));
     melo_message_set_size (
         msg, browser__response__pack (&resp, melo_message_get_data (msg)));
+
+    /* Free tags cover */
+    for (i = 0; i < count; i++)
+      if (tags[i].cover != protobuf_c_empty_string)
+        g_free (tags[i].cover);
 
     /* Free item list */
     free (items_ptr);
@@ -386,7 +391,7 @@ action_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
   if (id) {
     Browser__Action__Type type;
     MeloTags *tags = NULL;
-    const char *name;
+    const char *name = NULL;
     char *url;
 
     /* Generate URL */
