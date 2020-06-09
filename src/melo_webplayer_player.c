@@ -32,9 +32,9 @@
 #define MELO_WEBPLAYER_PLAYER_GRABBER_CLASS "YoutubeDL"
 
 #define MELO_WEBPLAYER_PLAYER_GRABBER_URL \
-  "https://yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
+  "yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL \
-  "https://yt-dl.org/update/LATEST_VERSION"
+  "yt-dl.org/update/LATEST_VERSION"
 
 struct _MeloWebplayerPlayer {
   GObject parent_instance;
@@ -46,6 +46,7 @@ struct _MeloWebplayerPlayer {
   char *path;
 
   MeloHttpClient *client;
+  bool use_https;
   bool updating;
   char *version;
   char *url;
@@ -205,6 +206,9 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   /* Create HTTP client */
   self->client = melo_http_client_new (NULL);
 
+  /* Use HTTPS by default */
+  self->use_https = true;
+
   /* Start grabber update */
   melo_webplayer_player_update_grabber (self);
 }
@@ -296,6 +300,15 @@ update_cb (MeloHttpClient *client, unsigned int code, const char *data,
 
   /* Failed to download update */
   if (code != 200) {
+    /* Try with HTTP */
+    if (melo_http_client_status_ssl_failed (code)) {
+      player->updating = false;
+      player->use_https = false;
+      melo_webplayer_player_update_grabber (player);
+      return;
+    }
+
+    /* Abort update */
     MELO_LOGE ("failed to download latest version");
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
@@ -357,6 +370,15 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
 
   /* Failed to get version */
   if (code != 200) {
+    /* Try with HTTP */
+    if (melo_http_client_status_ssl_failed (code)) {
+      player->updating = false;
+      player->use_https = false;
+      melo_webplayer_player_update_grabber (player);
+      return;
+    }
+
+    /* Abort update */
     MELO_LOGE ("failed to get latest version");
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
@@ -377,8 +399,10 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
     MELO_LOGI ("new version available: %s", player->version);
 
     /* Download new version */
-    melo_http_client_get (
-        player->client, MELO_WEBPLAYER_PLAYER_GRABBER_URL, update_cb, player);
+    melo_http_client_get (player->client,
+        player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_URL
+                          : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_URL,
+        update_cb, player);
   } else {
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->updating = false;
@@ -400,7 +424,9 @@ melo_webplayer_player_update_grabber (MeloWebplayerPlayer *player)
 
   /* Download version file */
   melo_http_client_get (player->client,
-      MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL, version_cb, player);
+      player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL
+                        : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL,
+      version_cb, player);
 }
 
 static gboolean
