@@ -46,6 +46,7 @@ struct _MeloWebplayerPlayer {
   char *path;
 
   MeloHttpClient *client;
+  gint64 last_update;
   bool use_https;
   bool updating;
   char *version;
@@ -57,6 +58,8 @@ struct _MeloWebplayerPlayer {
   bool stop;
   GAsyncQueue *queue;
 
+  guint monitor_id;
+
   PyObject *module;
   PyObject *instance;
 };
@@ -65,6 +68,8 @@ MELO_DEFINE_PLAYER (MeloWebplayerPlayer, melo_webplayer_player)
 
 static char *melo_webplayer_player_empty_url = "";
 
+static void network_changed_cb (
+    GNetworkMonitor *monitor, gboolean network_available, gpointer user_data);
 static gboolean bus_cb (GstBus *bus, GstMessage *msg, gpointer data);
 static void pad_added_cb (GstElement *src, GstPad *pad, GstElement *sink);
 
@@ -117,6 +122,10 @@ melo_webplayer_player_finalize (GObject *object)
   /* Free path */
   g_free (player->path);
 
+  /* Remove network monitor */
+  if (player->monitor_id)
+    g_source_remove (player->monitor_id);
+
   /* Remove bus watcher */
   g_source_remove (player->bus_id);
 
@@ -147,6 +156,7 @@ melo_webplayer_player_class_init (MeloWebplayerPlayerClass *klass)
 static void
 melo_webplayer_player_init (MeloWebplayerPlayer *self)
 {
+  GNetworkMonitor *monitor;
   GstElement *sink;
   GstCaps *caps;
   GstBus *bus;
@@ -211,6 +221,12 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
 
   /* Start grabber update */
   melo_webplayer_player_update_grabber (self);
+
+  /* Add netowrk monitoring to check for update */
+  monitor = g_network_monitor_get_default ();
+  if (monitor)
+    self->monitor_id = g_signal_connect (
+        monitor, "network-changed", G_CALLBACK (network_changed_cb), self);
 }
 
 MeloWebplayerPlayer *
@@ -218,6 +234,25 @@ melo_webplayer_player_new ()
 {
   return g_object_new (
       MELO_TYPE_WEBPLAYER_PLAYER, "id", MELO_WEBPLAYER_PLAYER_ID, NULL);
+}
+
+static void
+network_changed_cb (
+    GNetworkMonitor *monitor, gboolean network_available, gpointer user_data)
+{
+  MeloWebplayerPlayer *player = user_data;
+
+  /* Network not available */
+  if (!network_available)
+    return;
+
+  /* Last update done 30s before */
+  if (g_get_monotonic_time () - player->last_update < 5 * 60000000)
+    return;
+
+  /* Trigger update */
+  if (!player->updating)
+    melo_webplayer_player_update_grabber (player);
 }
 
 static void
@@ -280,6 +315,9 @@ end:
   /* Free string */
   g_free (file);
   player->updating = false;
+
+  /* Save last update timestamp */
+  player->last_update = g_get_monotonic_time ();
 
   /* Play pending URL */
   if (player->url) {
@@ -405,6 +443,7 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
         update_cb, player);
   } else {
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
+    player->last_update = g_get_monotonic_time ();
     player->updating = false;
   }
 
