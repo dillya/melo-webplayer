@@ -426,14 +426,13 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
   /* Update version string */
   g_free (player->version);
   player->version = g_strndup (data, size);
-
   /* Create version file path */
   file = g_build_filename (
       player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
 
   /* Compare version */
   if (!g_file_get_contents (file, &version, &len, NULL) || !version ||
-      memcmp (version, player->version, strlen (player->version))) {
+      len != size || memcmp (version, player->version, size)) {
     MELO_LOGI ("new version available: %s", player->version);
 
     /* Download new version */
