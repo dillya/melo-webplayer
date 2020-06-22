@@ -232,8 +232,10 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
 MeloWebplayerPlayer *
 melo_webplayer_player_new ()
 {
-  return g_object_new (
-      MELO_TYPE_WEBPLAYER_PLAYER, "id", MELO_WEBPLAYER_PLAYER_ID, NULL);
+  return g_object_new (MELO_TYPE_WEBPLAYER_PLAYER, "id",
+      MELO_WEBPLAYER_PLAYER_ID, "name", "Webplayer (youtube, ...)",
+      "description", "Play any web player content like Youtube videos", "icon",
+      "fab:youtube", NULL);
 }
 
 static void
