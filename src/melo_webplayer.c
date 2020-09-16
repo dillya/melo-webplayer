@@ -19,7 +19,7 @@
 
 #include <melo/melo_module.h>
 
-#define MELO_LOG_TAG "melo_radio_net"
+#define MELO_LOG_TAG "melo_webplayer"
 #include <melo/melo_log.h>
 
 #include "melo_webplayer_player.h"
