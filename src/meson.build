@@ -25,5 +25,6 @@ shared_library(
 	'melo_webplayer',
 	src,
 	dependencies : [libmelo_dep, libmelo_proto_dep, libpython3_dep],
+	version : meson.project_version(),
 	install : true,
 	install_dir : libmelo_dep.get_pkgconfig_variable('moduledir'))
