@@ -160,8 +160,6 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   GstElement *sink;
   GstCaps *caps;
   GstBus *bus;
-  wchar_t *path;
-  size_t len = 0;
 
   /* Create pipeline */
   self->pipeline = gst_pipeline_new (MELO_WEBPLAYER_PLAYER_ID "_pipeline");
@@ -187,24 +185,8 @@ melo_webplayer_player_init (MeloWebplayerPlayer *self)
   /* Create binary path */
   self->path = g_build_filename (
       g_get_user_data_dir (), "melo", "webplayer", "bin", NULL);
-  if (self->path) {
-    len = strlen (self->path);
+  if (self->path)
     g_mkdir_with_parents (self->path, 0700);
-  }
-
-  /* Generate python path */
-  len +=
-      wcslen (Py_GetPath ()) + sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
-  path = malloc (len * sizeof (*path));
-  swprintf (path, len, L"%s/%s:%ls", self->path,
-      MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
-
-  /* Set python path */
-  Py_SetPath (path);
-  free (path);
-
-  /* Initialize python */
-  Py_Initialize ();
 
   /* Create async queue */
   self->queue = g_async_queue_new_full (g_free);
@@ -609,6 +591,27 @@ melo_webplayer_player_thread_func (gpointer user_data)
     /* Import module */
     if (!player->module) {
       PyObject *name;
+
+      /* Python not yet initialized */
+      if (!Py_IsInitialized ()) {
+        wchar_t *path;
+        size_t len;
+
+        /* Generate python path */
+        len = strlen (player->path);
+        len += wcslen (Py_GetPath ()) +
+               sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
+        path = malloc (len * sizeof (*path));
+        swprintf (path, len, L"%s/%s:%ls", player->path,
+            MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
+
+        /* Set python path */
+        Py_SetPath (path);
+        free (path);
+
+        /* Initialize python */
+        Py_Initialize ();
+      }
 
       /* Create module name */
       name = PyUnicode_FromString (MELO_WEBPLAYER_PLAYER_GRABBER_MODULE);
