@@ -1,4 +1,12 @@
 #!/usr/bin/make -f
 
+# HACK: libpython3-dev doesn't export python3.pc until bullseye
+DEB_TARGET_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_TARGET_GNU_TYPE)
+PYTHON3_PC = $(shell find "/usr/lib/$(DEB_TARGET_GNU_TYPE)/pkgconfig/" -name "python-3.?.pc")
+
 %:
 	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	ln -sf $(PYTHON3_PC) python3.pc
+	PKG_CONFIG_PATH=$(shell pwd) dh_auto_configure
