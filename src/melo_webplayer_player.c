@@ -33,6 +33,8 @@
 
 #define MELO_WEBPLAYER_PLAYER_GRABBER_URL \
   "yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
+#define MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL \
+  "youtube-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL \
   "yt-dl.org/update/LATEST_VERSION"
 
@@ -388,7 +390,8 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
   MeloWebplayerPlayer *player = user_data;
   gchar *version = NULL;
   gsize len;
-  char *file;
+  const char *url = NULL;
+  char *file = NULL;
 
   /* Failed to get version */
   if (code != 200) {
@@ -400,30 +403,46 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
       return;
     }
 
-    /* Abort update */
-    MELO_LOGE ("failed to get latest version");
-    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
-    player->updating = false;
-    return;
+    /* Abort update if version exists */
+    file = g_build_filename (
+        player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
+    if (g_file_test (file, G_FILE_TEST_EXISTS)) {
+      /* Abort update */
+      MELO_LOGE ("failed to get latest version");
+      g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
+      player->updating = false;
+      g_free (file);
+      return;
+    }
+
+    /* Force download with 'null' version */
+    data = "null";
+    size = strlen (data);
+    url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL
+                            : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL;
   }
 
   /* Update version string */
   g_free (player->version);
   player->version = g_strndup (data, size);
+
   /* Create version file path */
-  file = g_build_filename (
-      player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
+  if (!file)
+    file = g_build_filename (
+        player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
 
   /* Compare version */
   if (!g_file_get_contents (file, &version, &len, NULL) || !version ||
       len != size || memcmp (version, player->version, size)) {
     MELO_LOGI ("new version available: %s", player->version);
 
+    /* Set downlad URL */
+    if (!url)
+      url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_URL
+                              : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_URL;
+
     /* Download new version */
-    melo_http_client_get (player->client,
-        player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_URL
-                          : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_URL,
-        update_cb, player);
+    melo_http_client_get (player->client, url, update_cb, player);
   } else {
     g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
     player->last_update = g_get_monotonic_time ();
