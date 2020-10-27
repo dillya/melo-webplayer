@@ -16,6 +16,7 @@
  */
 
 #include <melo/melo_http_client.h>
+#include <melo/melo_library.h>
 #include <melo/melo_playlist.h>
 
 #define MELO_LOG_TAG "youtube_browser"
@@ -175,7 +176,7 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
   static Browser__SortMenu *sort_menus_ptr[1] = {
       &sort_menus,
   };
-  static Browser__Action actions[2] = {
+  static Browser__Action actions[4] = {
       {
           .base = PROTOBUF_C_MESSAGE_INIT (&browser__action__descriptor),
           .type = BROWSER__ACTION__TYPE__PLAY,
@@ -188,10 +189,28 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
           .name = "Add video to playlist",
           .icon = "fa:plus",
       },
+      {
+          .base = PROTOBUF_C_MESSAGE_INIT (&browser__action__descriptor),
+          .type = BROWSER__ACTION__TYPE__SET_FAVORITE,
+          .name = "Add video to favorites",
+          .icon = "fa:star",
+      },
+      {
+          .base = PROTOBUF_C_MESSAGE_INIT (&browser__action__descriptor),
+          .type = BROWSER__ACTION__TYPE__UNSET_FAVORITE,
+          .name = "Remove video from favorites",
+          .icon = "fa:star",
+      },
   };
-  static Browser__Action *actions_ptr[2] = {
+  static Browser__Action *set_fav_actions_ptr[3] = {
       &actions[0],
       &actions[1],
+      &actions[2],
+  };
+  static Browser__Action *unset_fav_actions_ptr[3] = {
+      &actions[0],
+      &actions[1],
+      &actions[3],
   };
   MeloRequest *req = user_data;
 
@@ -253,6 +272,7 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
     for (i = 0; i < count; i++) {
       JsonObject *o, *id, *snip;
       const char *cover;
+      uint64_t media_id;
 
       /* Init media item */
       browser__response__media_item__init (&items[i]);
@@ -275,9 +295,18 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
       items[i].name = (char *) json_object_get_string_member (snip, "title");
       items[i].type = BROWSER__RESPONSE__MEDIA_ITEM__TYPE__MEDIA;
 
-      /* Set media actions */
-      items[i].n_actions = G_N_ELEMENTS (actions_ptr);
-      items[i].actions = actions_ptr;
+      /* Set favorite and actions */
+      media_id = melo_library_get_media_id_from_browser (
+          MELO_YOUTUBE_BROWSER_ID, items[i].id);
+      items[i].favorite =
+          melo_library_media_get_flags (media_id) & MELO_LIBRARY_FLAG_FAVORITE;
+      if (items[i].favorite) {
+        items[i].n_actions = G_N_ELEMENTS (unset_fav_actions_ptr);
+        items[i].actions = unset_fav_actions_ptr;
+      } else {
+        items[i].n_actions = G_N_ELEMENTS (set_fav_actions_ptr);
+        items[i].actions = set_fav_actions_ptr;
+      }
 
       /* Set tags */
       items[i].tags = &tags[i];
@@ -413,6 +442,8 @@ action_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
         if (json_object_has_member (obj, "title")) {
           name = json_object_get_string_member (obj, "title");
           melo_tags_set_title (tags, name);
+          melo_tags_set_browser (tags, MELO_YOUTUBE_BROWSER_ID);
+          melo_tags_set_media_id (tags, id);
         }
 
         /* Set cover */
@@ -432,6 +463,36 @@ action_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
       melo_playlist_play_media (MELO_WEBPLAYER_PLAYER_ID, url, name, tags);
     else if (type == BROWSER__ACTION__TYPE__ADD)
       melo_playlist_add_media (MELO_WEBPLAYER_PLAYER_ID, url, name, tags);
+    else {
+      char *path, *media;
+
+      /* Separate path */
+      path = g_strdup (url);
+      media = strrchr (path, '/');
+      if (media)
+        *media++ = '\0';
+
+      /* Set / unset favorite marker */
+      if (type == BROWSER__ACTION__TYPE__UNSET_FAVORITE) {
+        uint64_t id;
+
+        /* Get media ID */
+        id = melo_library_get_media_id (
+            MELO_WEBPLAYER_PLAYER_ID, 0, path, 0, media);
+
+        /* Unset favorite */
+        melo_library_update_media_flags (
+            id, MELO_LIBRARY_FLAG_FAVORITE_ONLY, true);
+      } else if (type == BROWSER__ACTION__TYPE__SET_FAVORITE)
+        /* Set favorite */
+        melo_library_add_media (MELO_WEBPLAYER_PLAYER_ID, 0, path, 0, media, 0,
+            MELO_LIBRARY_SELECT (COVER), name, tags, 0,
+            MELO_LIBRARY_FLAG_FAVORITE_ONLY);
+
+      /* Free resources */
+      g_free (path);
+      melo_tags_unref (tags);
+    }
 
     /* Free URL */
     g_free (url);
@@ -452,7 +513,9 @@ melo_youtube_browser_do_action (MeloYoutubeBrowser *browser,
 
   /* Check action type */
   if (r->type != BROWSER__ACTION__TYPE__PLAY &&
-      r->type != BROWSER__ACTION__TYPE__ADD)
+      r->type != BROWSER__ACTION__TYPE__ADD &&
+      r->type != BROWSER__ACTION__TYPE__SET_FAVORITE &&
+      r->type != BROWSER__ACTION__TYPE__UNSET_FAVORITE)
     return false;
 
   /* Support only search for now */
