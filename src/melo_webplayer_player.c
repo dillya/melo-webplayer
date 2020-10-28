@@ -24,19 +24,18 @@
 
 #include "melo_webplayer_player.h"
 
-#define MELO_WEBPLAYER_PLAYER_GRABBER "youtube-dl"
+#define MELO_WEBPLAYER_PLAYER_GRABBER "youtube-dlc"
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION "version"
 
 #define MELO_WEBPLAYER_PLAYER_GRABBER_PATH "output"
-#define MELO_WEBPLAYER_PLAYER_GRABBER_MODULE "youtube_dl"
+#define MELO_WEBPLAYER_PLAYER_GRABBER_MODULE "youtube_dlc"
 #define MELO_WEBPLAYER_PLAYER_GRABBER_CLASS "YoutubeDL"
-
 #define MELO_WEBPLAYER_PLAYER_GRABBER_URL \
-  "yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
-#define MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL \
-  "youtube-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
+  "github.com/blackjack4494/yt-dlc/releases/latest/" \
+  "download/" MELO_WEBPLAYER_PLAYER_GRABBER
+#define MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL MELO_WEBPLAYER_PLAYER_GRABBER_URL
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL \
-  "yt-dl.org/update/LATEST_VERSION"
+  "api.github.com/repos/blackjack4494/yt-dlc/releases/latest"
 
 struct _MeloWebplayerPlayer {
   GObject parent_instance;
@@ -384,19 +383,20 @@ end:
 }
 
 static void
-version_cb (MeloHttpClient *client, unsigned int code, const char *data,
-    size_t size, void *user_data)
+version_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
 {
   MeloWebplayerPlayer *player = user_data;
   gchar *version = NULL;
   gsize len;
+  size_t size;
+  const char *tag_name = "null";
   const char *url = NULL;
   char *file = NULL;
 
   /* Failed to get version */
-  if (code != 200) {
+  if (!node) {
     /* Try with HTTP */
-    if (melo_http_client_status_ssl_failed (code)) {
+    if (player->use_https) {
       player->updating = false;
       player->use_https = false;
       melo_webplayer_player_update_grabber (player);
@@ -416,15 +416,19 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
     }
 
     /* Force download with 'null' version */
-    data = "null";
-    size = strlen (data);
     url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL
                             : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL;
   }
 
+  /* Get version from json object */
+  if (node)
+    tag_name =
+        json_object_get_string_member (json_node_get_object (node), "tag_name");
+
   /* Update version string */
   g_free (player->version);
-  player->version = g_strndup (data, size);
+  player->version = g_strdup (tag_name);
+  size = strlen (player->version);
 
   /* Create version file path */
   if (!file)
@@ -464,7 +468,7 @@ melo_webplayer_player_update_grabber (MeloWebplayerPlayer *player)
   player->updating = true;
 
   /* Download version file */
-  melo_http_client_get (player->client,
+  melo_http_client_get_json (player->client,
       player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL
                         : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL,
       version_cb, player);
