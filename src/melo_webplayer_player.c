@@ -60,9 +60,6 @@ struct _MeloWebplayerPlayer {
   GAsyncQueue *queue;
 
   guint monitor_id;
-
-  PyObject *module;
-  PyObject *instance;
 };
 
 MELO_DEFINE_PLAYER (MeloWebplayerPlayer, melo_webplayer_player)
@@ -112,13 +109,6 @@ melo_webplayer_player_finalize (GObject *object)
 
   /* Release queue */
   g_async_queue_unref (player->queue);
-
-  /* Release python objects */
-  Py_XDECREF (player->instance);
-  Py_XDECREF (player->module);
-
-  /* Finalize python */
-  Py_Finalize ();
 
   /* Free path */
   g_free (player->path);
@@ -590,6 +580,8 @@ static gpointer
 melo_webplayer_player_thread_func (gpointer user_data)
 {
   MeloWebplayerPlayer *player = user_data;
+  PyObject *module = NULL;
+  PyObject *instance = NULL;
 
   while (!player->stop) {
     PyObject *result;
@@ -612,7 +604,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
     }
 
     /* Import module */
-    if (!player->module) {
+    if (!module) {
       PyObject *name;
 
       /* Python not yet initialized */
@@ -640,8 +632,8 @@ melo_webplayer_player_thread_func (gpointer user_data)
       name = PyUnicode_FromString (MELO_WEBPLAYER_PLAYER_GRABBER_MODULE);
 
       /* Import module */
-      player->module = PyImport_Import (name);
-      if (!player->module) {
+      module = PyImport_Import (name);
+      if (!module) {
         MELO_LOGE ("failed to import module");
         g_free (url);
         continue;
@@ -652,11 +644,11 @@ melo_webplayer_player_thread_func (gpointer user_data)
     }
 
     /* Instantiate object */
-    if (!player->instance) {
+    if (!instance) {
       PyObject *dict, *class, *args;
 
       /* Get module dictionary */
-      dict = PyModule_GetDict (player->module);
+      dict = PyModule_GetDict (module);
       if (!dict) {
         MELO_LOGE ("failed to get module dictionary");
         g_free (url);
@@ -682,9 +674,9 @@ melo_webplayer_player_thread_func (gpointer user_data)
       }
 
       /* Create object instance */
-      player->instance = PyObject_CallObject (class, args);
+      instance = PyObject_CallObject (class, args);
       Py_DECREF (args);
-      if (!player->instance) {
+      if (!instance) {
         MELO_LOGE ("failed to instantiate object");
         g_free (url);
         continue;
@@ -697,8 +689,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
       continue;
 
     /* Get video info */
-    result =
-        PyObject_CallMethod (player->instance, "extract_info", "(sb)", url, 0);
+    result = PyObject_CallMethod (instance, "extract_info", "(sb)", url, 0);
     if (result) {
       PyObject *formats;
 
@@ -781,6 +772,13 @@ melo_webplayer_player_thread_func (gpointer user_data)
     /* Release result */
     Py_XDECREF (result);
   }
+
+  /* Release python objects */
+  Py_XDECREF (instance);
+  Py_XDECREF (module);
+
+  /* Finalize python */
+  Py_Finalize ();
 
   return NULL;
 }
