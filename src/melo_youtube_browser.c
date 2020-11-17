@@ -342,7 +342,7 @@ list_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
   }
 
   /* Release request */
-  melo_request_unref (req);
+  melo_request_complete (req);
 }
 
 static bool
@@ -500,7 +500,7 @@ action_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
 
 end:
   /* Release request */
-  melo_request_unref (req);
+  melo_request_complete (req);
 }
 
 static bool
