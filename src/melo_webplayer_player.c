@@ -716,8 +716,11 @@ melo_webplayer_player_thread_func (gpointer user_data)
 
           /* Get audio bitrate */
           tmp = PyDict_GetItemString (fmt, "abr");
-          if (!tmp)
-            continue;
+          if (!tmp) {
+            tmp = PyDict_GetItemString (fmt, "tbr");
+            if (!tmp)
+              continue;
+          }
           br = PyLong_AsLong (tmp);
 
           /* Get URL */
@@ -750,7 +753,11 @@ melo_webplayer_player_thread_func (gpointer user_data)
           uri = NULL;
         MELO_LOGD ("best audio track found: %u %u", a_abr, v_abr);
       }
-    }
+      else
+        MELO_LOGE ("failed to list formats");
+    } else
+      MELO_LOGE ("failed to extract video info");
+
 
     /* Audio stream found */
     if (uri) {
