@@ -24,19 +24,18 @@
 
 #include "melo_webplayer_player.h"
 
-#define MELO_WEBPLAYER_PLAYER_GRABBER "youtube-dl"
+#define MELO_WEBPLAYER_PLAYER_GRABBER "yt-dlp"
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION "version"
 
 #define MELO_WEBPLAYER_PLAYER_GRABBER_PATH "output"
-#define MELO_WEBPLAYER_PLAYER_GRABBER_MODULE "youtube_dl"
+#define MELO_WEBPLAYER_PLAYER_GRABBER_MODULE "yt_dlp"
 #define MELO_WEBPLAYER_PLAYER_GRABBER_CLASS "YoutubeDL"
 
-#define MELO_WEBPLAYER_PLAYER_GRABBER_URL \
-  "yt-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
-#define MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL \
-  "youtube-dl.org/downloads/latest/" MELO_WEBPLAYER_PLAYER_GRABBER
+#define MELO_WEBPLAYER_PLAYER_GRABBER_LATEST_URL \
+  "github.com/yt-dlp/yt-dlp/releases/latest/" \
+  "download/" MELO_WEBPLAYER_PLAYER_GRABBER
 #define MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL \
-  "yt-dl.org/update/LATEST_VERSION"
+  "api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
 
 struct _MeloWebplayerPlayer {
   GObject parent_instance;
@@ -374,47 +373,58 @@ end:
 }
 
 static void
-version_cb (MeloHttpClient *client, unsigned int code, const char *data,
-    size_t size, void *user_data)
+version_cb (MeloHttpClient *client, JsonNode *node, void *user_data)
 {
   MeloWebplayerPlayer *player = user_data;
   gchar *version = NULL;
   gsize len;
-  const char *url = NULL;
+  JsonObject *obj;
+  JsonArray *array;
   char *file = NULL;
+  const gchar *vers;
+  const gchar *url = NULL;
 
-  /* Failed to get version */
-  if (code != 200) {
-    /* Try with HTTP */
-    if (melo_http_client_status_ssl_failed (code)) {
-      player->updating = false;
-      player->use_https = false;
-      melo_webplayer_player_update_grabber (player);
-      return;
+  /* Get JSON object */
+  obj = json_node_get_object (node);
+  if (!obj)
+    goto error;
+
+  /* Get version string (tag_name) */
+  vers = json_object_get_string_member (obj, "tag_name");
+  if (!vers)
+    goto error;
+
+  /* Get assets array */
+  array = json_object_get_array_member (obj, "assets");
+  if (array) {
+    unsigned int i, count;
+
+    /* Find binary from assets array */
+    count = json_array_get_length (array);
+    for (i = 0; i < count; i++) {
+      const gchar *name;
+
+      /* Get next entry */
+      obj = json_array_get_object_element (array, i);
+      if (!obj)
+        continue;
+
+      /* Get name */
+      name = json_object_get_string_member (obj, "name");
+      if (!name)
+        continue;
+
+      /* Select grabber */
+      if (!strcmp (name, MELO_WEBPLAYER_PLAYER_GRABBER)) {
+        url = json_object_get_string_member (obj, "browser_download_url");
+        break;
+      }
     }
-
-    /* Abort update if version exists */
-    file = g_build_filename (
-        player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
-    if (g_file_test (file, G_FILE_TEST_EXISTS)) {
-      /* Abort update */
-      MELO_LOGE ("failed to get latest version");
-      g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
-      player->updating = false;
-      g_free (file);
-      return;
-    }
-
-    /* Force download with 'null' version */
-    data = "null";
-    size = strlen (data);
-    url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL
-                            : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_ALT_URL;
   }
 
   /* Update version string */
   g_free (player->version);
-  player->version = g_strndup (data, size);
+  player->version = g_strdup (vers);
 
   /* Create version file path */
   if (!file)
@@ -422,14 +432,16 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
         player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
 
   /* Compare version */
-  if (!g_file_get_contents (file, &version, &len, NULL) || !version ||
-      len != size || memcmp (version, player->version, size)) {
+  if (!g_file_get_contents (file, &version, &len, NULL) || !version || !len ||
+      strncmp (version, player->version, len)) {
     MELO_LOGI ("new version available: %s", player->version);
 
     /* Set downlad URL */
     if (!url)
-      url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_URL
-                              : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_URL;
+      url = player->use_https
+                ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_LATEST_URL
+                : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_LATEST_URL;
+    MELO_LOGI ("use version: %s", url);
 
     /* Download new version */
     melo_http_client_get (player->client, url, update_cb, player);
@@ -442,6 +454,35 @@ version_cb (MeloHttpClient *client, unsigned int code, const char *data,
   /* Free string */
   g_free (version);
   g_free (file);
+  return;
+
+error:
+  /* Try with HTTP */
+  if (player->use_https) {
+    player->updating = false;
+    player->use_https = false;
+    melo_webplayer_player_update_grabber (player);
+    return;
+  }
+
+  /* Abort update if version exists */
+  file = g_build_filename (
+      player->path, MELO_WEBPLAYER_PLAYER_GRABBER_VERSION, NULL);
+  if (g_file_test (file, G_FILE_TEST_EXISTS)) {
+    /* Abort update */
+    MELO_LOGE ("failed to get latest version");
+    g_async_queue_push (player->queue, melo_webplayer_player_empty_url);
+    player->updating = false;
+    g_free (file);
+    return;
+  }
+
+  /* Force download with 'null' version */
+  url = player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_LATEST_URL
+                          : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_LATEST_URL;
+
+  /* Download new version */
+  melo_http_client_get (player->client, url, update_cb, player);
 }
 
 static void
@@ -453,8 +494,8 @@ melo_webplayer_player_update_grabber (MeloWebplayerPlayer *player)
   /* Start update */
   player->updating = true;
 
-  /* Download version file */
-  melo_http_client_get (player->client,
+  /* Download version JSON */
+  melo_http_client_get_json (player->client,
       player->use_https ? "https://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL
                         : "http://" MELO_WEBPLAYER_PLAYER_GRABBER_VERSION_URL,
       version_cb, player);
@@ -605,6 +646,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
 
       /* Python not yet initialized */
       if (!Py_IsInitialized ()) {
+        PyObject *frozen;
         wchar_t *path;
         size_t len;
 
@@ -622,6 +664,11 @@ melo_webplayer_player_thread_func (gpointer user_data)
 
         /* Initialize python */
         Py_Initialize ();
+
+        /* HACK: prevent internal updater by setting sys.frozen */
+        frozen = PyUnicode_FromString ("melo");
+        PySys_SetObject ("frozen", frozen);
+        Py_DECREF (frozen);
       }
 
       /* Create module name */
@@ -632,6 +679,10 @@ melo_webplayer_player_thread_func (gpointer user_data)
       if (!module) {
         MELO_LOGE ("failed to import module");
         g_free (url);
+
+        /* Print Python backtrace */
+        PyErr_Print ();
+
         continue;
       }
       Py_DECREF (name);
