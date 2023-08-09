@@ -650,20 +650,26 @@ melo_webplayer_player_thread_func (gpointer user_data)
         wchar_t *path;
         size_t len;
 
-        /* Generate python path */
-        len = strlen (player->path);
-        len += wcslen (Py_GetPath ()) +
-               sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
-        path = malloc (len * sizeof (*path));
-        swprintf (path, len, L"%s/%s:%ls", player->path,
-            MELO_WEBPLAYER_PLAYER_GRABBER_PATH, Py_GetPath ());
+        /* Generate Python configuration */
+        PyConfig config;
+        PyConfig_InitPythonConfig (&config);
+        PyConfig_Read (&config);
 
-        /* Set python path */
-        Py_SetPath (path);
+        /* Generate python path */
+        len = strlen (player->path) +
+              sizeof (MELO_WEBPLAYER_PLAYER_GRABBER_PATH) + 3;
+        path = malloc (len * sizeof (*path));
+        swprintf (path, len, L"%s/%s", player->path,
+            MELO_WEBPLAYER_PLAYER_GRABBER_PATH);
+
+        /* Set module search path */
+        config.module_search_paths_set = 1;
+        PyWideStringList_Append (&config.module_search_paths, path);
         free (path);
 
         /* Initialize python */
-        Py_Initialize ();
+        Py_InitializeFromConfig (&config);
+        PyConfig_Clear (&config);
 
         /* HACK: prevent internal updater by setting sys.frozen */
         frozen = PyUnicode_FromString ("melo");
@@ -803,12 +809,10 @@ melo_webplayer_player_thread_func (gpointer user_data)
         else
           uri = NULL;
         MELO_LOGD ("best audio track found: %u %u", a_abr, v_abr);
-      }
-      else
+      } else
         MELO_LOGE ("failed to list formats");
     } else
       MELO_LOGE ("failed to extract video info");
-
 
     /* Audio stream found */
     if (uri) {

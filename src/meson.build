@@ -18,7 +18,7 @@ src = [
 # Library dependencies
 libmelo_dep = dependency('melo', version : '>=1.0.0')
 libmelo_proto_dep = dependency('melo_proto', version : '>=1.0.0')
-libpython3_dep = dependency('python3', version : '>=3.3.0')
+libpython3_dep = dependency('python3-embed', version : '>=3.3.0')
 
 # Generate module
 shared_library(
