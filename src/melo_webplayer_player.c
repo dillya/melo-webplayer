@@ -257,6 +257,10 @@ unzip_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 
   /* Check status */
   if (!status || status == 1) {
+    /* Use null version */
+    if (!player->version)
+      player->version = g_strdup ("0.0.0");
+
     /* Save version file */
     if (!g_file_set_contents (
             file, player->version, strlen (player->version), &error)) {
@@ -750,7 +754,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
       formats = PyDict_GetItemString (result, "formats");
       if (PyList_Check (formats)) {
         const char *v_uri = NULL, *a_uri = NULL;
-        unsigned int v_abr = 0, a_abr = 0;
+        double v_abr = 0, a_abr = 0;
         unsigned int i, count;
 
         /* Get formats count */
@@ -759,7 +763,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
         /* Parse formats list */
         for (i = 0; i < count; i++) {
           PyObject *fmt, *tmp;
-          unsigned int br;
+          double br;
 
           /* Get next format */
           fmt = PyList_GetItem (formats, i);
@@ -778,7 +782,14 @@ melo_webplayer_player_thread_func (gpointer user_data)
             if (!tmp)
               continue;
           }
-          br = PyLong_AsLong (tmp);
+          if (Py_IS_TYPE (tmp, &PyFloat_Type))
+            br = PyFloat_AsDouble (tmp);
+          else if (Py_IS_TYPE (tmp, &PyLong_Type))
+            br = PyLong_AsDouble (tmp);
+          else {
+            br = 0;
+            MELO_LOGW ("unsupported bit-rate type");
+          }
 
           /* Get URL */
           tmp = PyDict_GetItemString (fmt, "url");
@@ -808,7 +819,7 @@ melo_webplayer_player_thread_func (gpointer user_data)
           uri = v_uri;
         else
           uri = NULL;
-        MELO_LOGD ("best audio track found: %u %u", a_abr, v_abr);
+        MELO_LOGD ("best audio track found: %f %f", a_abr, v_abr);
       } else
         MELO_LOGE ("failed to list formats");
     } else
